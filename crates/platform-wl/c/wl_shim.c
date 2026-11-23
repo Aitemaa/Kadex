@@ -510,7 +510,16 @@ static void data_dev_data_offer(void *data, struct wl_data_device *dev, struct w
 }
 
 static void data_dev_enter(void *d, struct wl_data_device *dv, uint32_t s, struct wl_surface *sf, wl_fixed_t x, wl_fixed_t y, struct wl_data_offer *o) {
-    (void)d; (void)dv; (void)s; (void)sf; (void)x; (void)y; (void)o;
+    (void)d; (void)dv; (void)s; (void)sf; (void)x; (void)y;
+    // Drag-and-drop isn't supported: release the offer and its mime slot instead of leaking them.
+    if (o) {
+        char **mime_slot = (char **)wl_data_offer_get_user_data(o);
+        if (mime_slot) {
+            free(*mime_slot);
+            free(mime_slot);
+        }
+        wl_data_offer_destroy(o);
+    }
 }
 static void data_dev_leave(void *d, struct wl_data_device *dv) { (void)d; (void)dv; }
 static void data_dev_motion(void *d, struct wl_data_device *dv, uint32_t t, wl_fixed_t x, wl_fixed_t y) { (void)d; (void)dv; (void)t; (void)x; (void)y; }

@@ -617,8 +617,11 @@ extern "C" fn cb_key(
     pressed: bool,
 ) {
     let d = unsafe { &mut *(ud as *mut Daemon) };
+    let is_modifier_sym = (0xffe1..=0xffee).contains(&keysym);
     if !pressed {
-        if d.active_repeat.as_ref().map(|r| r.keysym == keysym).unwrap_or(false) {
+        // The released keysym can differ from the pressed one (e.g. Shift pressed while
+        // holding 'a' releases 'A'), so stop repeating on any non-modifier release.
+        if !is_modifier_sym {
             d.active_repeat = None;
         }
         return;
@@ -642,8 +645,8 @@ extern "C" fn cb_key(
 
     // Arm key repeat for non-modifier repeatable keys
     let is_shortcut = (mods & (KDX_MOD_CTRL | KDX_MOD_ALT | KDX_MOD_SUPER)) != 0;
-    let is_modifier_sym = (0xffe1..=0xffee).contains(&keysym);
-    if !is_shortcut && !is_modifier_sym && d.repeat_rate > 0 {
+    let still_shown = d.windows.iter().any(|w| w.id == win_id && w.visible);
+    if !is_shortcut && !is_modifier_sym && still_shown && d.repeat_rate > 0 {
         let delay = d.repeat_delay_ms.max(150) as u64;
         d.active_repeat = Some(RepeatKey {
             win_id,

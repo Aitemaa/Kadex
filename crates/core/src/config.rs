@@ -46,7 +46,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            font_family: String::from("monospace"),
+            font_family: String::from(if cfg!(windows) { "Consolas" } else { "monospace" }),
             font_size: 11.5,
             word_wrap: true,
             theme: ThemeMode::Auto,

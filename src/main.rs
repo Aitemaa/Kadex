@@ -64,6 +64,11 @@ fn parse_cli() -> Result<Option<IpcCommand>, String> {
 }
 
 fn main() -> ExitCode {
+    #[cfg(target_os = "windows")]
+    if env::args_os().len() > 1 {
+        kadex_platform_win::attach_parent_console();
+    }
+
     let cmd = match parse_cli() {
         Ok(Some(c)) => c,
         Ok(None) => return ExitCode::SUCCESS,

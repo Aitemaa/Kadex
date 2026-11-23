@@ -446,7 +446,11 @@ impl Storage {
         let src = self.paths.note_path(id);
         if src.exists() {
             fs::create_dir_all(&self.paths.archive_dir)?;
-            let dst = self.paths.archive_dir.join(format!("{id}.txt"));
+            // Reuse the sanitised file name so a crafted id can't escape the archive folder.
+            let Some(name) = src.file_name() else {
+                return Ok(());
+            };
+            let dst = self.paths.archive_dir.join(name);
             fs::rename(&src, &dst)?;
         }
         self.state.notes.remove(id);
@@ -496,6 +500,32 @@ mod tests {
         assert_eq!(loaded.encoding, Encoding::Utf16Le);
         assert_eq!(loaded.line_ending, LineEnding::CrLf);
         assert_eq!(loaded.text, original);
+    }
+
+    #[test]
+    fn archive_stays_inside_archive_dir() {
+        let dir = env::temp_dir().join(format!("kadex-archive-test-{}", std::process::id()));
+        let notes_dir = dir.join("notes");
+        let paths = AppPaths {
+            config_file: dir.join("config.ini"),
+            state_file: dir.join("state.ini"),
+            archive_dir: notes_dir.join("archive"),
+            notes_dir,
+            socket_path: dir.join("kadex.sock"),
+            portable: true,
+        };
+        paths.ensure_dirs().unwrap();
+        let mut storage = Storage {
+            paths,
+            config: Config::default(),
+            state: AppState::default(),
+        };
+        let id = "../../escape";
+        storage.save_note(id, "hello").unwrap();
+        storage.archive_note(id).unwrap();
+        assert!(storage.paths.archive_dir.join("escape.txt").exists());
+        assert!(!dir.join("escape.txt").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

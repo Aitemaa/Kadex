@@ -21,6 +21,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, LoadLibraryW};
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 
 const EM_SETMODIFY: u32 = 0x00B9;
 const EM_SETBKGNDCOLOR: u32 = 0x0443;
@@ -31,6 +32,7 @@ const EM_EXGETSEL: u32 = 0x0434;
 const EM_EXSETSEL: u32 = 0x0437;
 const ENM_CHANGE: u32 = 0x0000_0001;
 const CFM_COLOR: u32 = 0x4000_0000;
+const SCF_DEFAULT: u32 = 0x0000;
 const SCF_ALL: u32 = 0x0004;
 
 #[repr(C)]
@@ -61,7 +63,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindowLongPtrW, GetWindowRect,
     GetWindowTextLengthW, GetWindowTextW, KillTimer, MoveWindow, SendMessageW,
     SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-    ShowWindow, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_NOHIDESEL, GWLP_USERDATA,
+    IsWindowVisible, SetForegroundWindow, ShowWindow, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_NOHIDESEL, GWLP_USERDATA,
     HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, LWA_ALPHA, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW,
     WM_NCLBUTTONDOWN, WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_TOPMOST,
     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
@@ -151,18 +153,32 @@ impl NoteWindow {
                     0,
                     rgb_to_colorref(pal.bg) as LPARAM,
                 );
-                let mut cf: CHARFORMAT2W = std::mem::zeroed();
-                cf.cbSize = std::mem::size_of::<CHARFORMAT2W>() as u32;
-                cf.dwMask = CFM_COLOR;
-                cf.crTextColor = rgb_to_colorref(pal.fg);
+            }
+            self.apply_text_color();
+            InvalidateRect(self.hwnd, std::ptr::null(), 1);
+        }
+    }
+
+    /// Sets the text colour on the existing text *and* the default format, otherwise text
+    /// typed into an empty note uses RichEdit's default black, unreadable on dark palettes.
+    fn apply_text_color(&self) {
+        if self.edit_hwnd.is_null() {
+            return;
+        }
+        let pal = self.palette();
+        unsafe {
+            let mut cf: CHARFORMAT2W = std::mem::zeroed();
+            cf.cbSize = std::mem::size_of::<CHARFORMAT2W>() as u32;
+            cf.dwMask = CFM_COLOR;
+            cf.crTextColor = rgb_to_colorref(pal.fg);
+            for scope in [SCF_DEFAULT, SCF_ALL] {
                 SendMessageW(
                     self.edit_hwnd,
                     EM_SETCHARFORMAT,
-                    SCF_ALL as WPARAM,
+                    scope as WPARAM,
                     (&cf as *const CHARFORMAT2W) as LPARAM,
                 );
             }
-            InvalidateRect(self.hwnd, std::ptr::null(), 1);
         }
     }
 
@@ -170,7 +186,14 @@ impl NoteWindow {
         let dpi = unsafe { GetDpiForWindow(self.hwnd) };
         let dpi = if dpi == 0 { 96 } else { dpi };
         let height = -((self.font_size * dpi as f32 / 72.0).round() as i32);
-        let face = to_wide_null(&self.font_family);
+        // Generic fontconfig names (the Linux defaults) aren't real Windows fonts.
+        let family = match self.font_family.to_ascii_lowercase().as_str() {
+            "monospace" | "mono" => "Consolas",
+            "sans-serif" | "sans" => "Segoe UI",
+            "serif" => "Georgia",
+            _ => self.font_family.as_str(),
+        };
+        let face = to_wide_null(family);
         unsafe {
             let hfont = CreateFontW(
                 height,
@@ -198,6 +221,8 @@ impl NoteWindow {
                 }
             }
         }
+        // WM_SETFONT resets the character format, colour included.
+        self.apply_text_color();
     }
 
     pub fn apply_opacity(&self) {
@@ -295,6 +320,19 @@ impl NoteWindow {
                 (rc.right - rc.left).max(220) as u32,
                 (rc.bottom - rc.top).max(160) as u32,
             )
+        }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        unsafe { IsWindowVisible(self.hwnd) != 0 }
+    }
+
+    pub fn focus(&self) {
+        unsafe {
+            SetForegroundWindow(self.hwnd);
+            if !self.edit_hwnd.is_null() {
+                SetFocus(self.edit_hwnd);
+            }
         }
     }
 

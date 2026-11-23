@@ -1,6 +1,6 @@
 //! Window & editor view state, input handling, and Cairo/Pango rendering for Wayland.
 
-use std::ffi::CString;
+use std::ffi::{c_char, CString};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -88,6 +88,8 @@ pub struct EditorWindow {
     pub view_slice_end: usize,
     pub total_lines_cached: usize,
     pub cached_version: u64,
+    /// Set when the caret moved and should be scrolled into view on the next paint.
+    pub follow_caret: bool,
 }
 
 impl EditorWindow {
@@ -154,6 +156,7 @@ impl EditorWindow {
             view_slice_end: 0,
             total_lines_cached: total_lines,
             cached_version: u64::MAX,
+            follow_caret: true,
         }
     }
 
@@ -273,7 +276,7 @@ impl EditorWindow {
         if let Some(sel) = self.buf.selected_text() {
             if !sel.is_empty() {
                 unsafe {
-                    kdx_clipboard_set(app, sel.as_ptr() as *const i8, sel.len(), true);
+                    kdx_clipboard_set(app, sel.as_ptr() as *const c_char, sel.len(), true);
                 }
             }
         }
@@ -282,7 +285,7 @@ impl EditorWindow {
     fn copy_to_clipboard(&self, app: *mut KdxApp) {
         if let Some(sel) = self.buf.selected_text() {
             unsafe {
-                kdx_clipboard_set(app, sel.as_ptr() as *const i8, sel.len(), false);
+                kdx_clipboard_set(app, sel.as_ptr() as *const c_char, sel.len(), false);
             }
         }
     }
@@ -305,6 +308,7 @@ impl EditorWindow {
                 self.buf.insert_str(&text);
                 self.schedule_autosave(autosave_ms);
                 self.update_title();
+                self.ensure_cursor_visible();
             }
             self.needs_redraw = true;
         }
@@ -369,7 +373,7 @@ impl EditorWindow {
             let matches = if self.case_sensitive {
                 selected == self.find_query
             } else {
-                selected.eq_ignore_ascii_case(&self.find_query)
+                selected.to_lowercase() == self.find_query.to_lowercase()
             };
             if matches {
                 let rep = self.replace_query.clone();
@@ -947,7 +951,7 @@ impl EditorWindow {
             kdx_hit_test(
                 c_font.as_ptr(),
                 self.font_size as f64,
-                slice.as_ptr() as *const i8,
+                slice.as_ptr() as *const c_char,
                 slice.len(),
                 wrap,
                 lx,
@@ -959,6 +963,7 @@ impl EditorWindow {
     }
 
     pub fn ensure_cursor_visible(&mut self) {
+        self.follow_caret = true;
         let vp_h = self.text_viewport_height();
         if self.buf.len() > LARGE_FILE_THRESHOLD {
             let cur = self.buf.cursor();
@@ -1021,7 +1026,7 @@ impl EditorWindow {
                 // "+" button
                 let plus = "+";
                 let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 11.5, plus.as_ptr() as *const i8, plus.len(), -1)
+                    kdx_layout_new(cr, c_ui_font.as_ptr(), 11.5, plus.as_ptr() as *const c_char, plus.len(), -1)
                 };
                 unsafe {
                     kdx_layout_draw(cr, pl, 11.0, 4.0, pal.fg, 0.9);
@@ -1046,7 +1051,7 @@ impl EditorWindow {
             if self.is_overlay() {
                 let label = "Kadex Scratchpad  ·  Esc to hide";
                 let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, label.as_ptr() as *const i8, label.len(), -1)
+                    kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, label.as_ptr() as *const c_char, label.len(), -1)
                 };
                 unsafe {
                     kdx_layout_draw(cr, pl, dots_start + (PALETTE_COUNT as f64) * 16.0 + 6.0, 7.0, pal.muted, 0.95);
@@ -1058,7 +1063,7 @@ impl EditorWindow {
             if self.is_sticky() {
                 let arch = "A";
                 let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, arch.as_ptr() as *const i8, arch.len(), -1)
+                    kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, arch.as_ptr() as *const c_char, arch.len(), -1)
                 };
                 unsafe {
                     kdx_layout_draw(cr, pl, w - 45.0, 6.5, pal.muted, 0.95);
@@ -1067,7 +1072,7 @@ impl EditorWindow {
             }
             let close_txt = "×";
             let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 11.5, close_txt.as_ptr() as *const i8, close_txt.len(), -1)
+                kdx_layout_new(cr, c_ui_font.as_ptr(), 11.5, close_txt.as_ptr() as *const c_char, close_txt.len(), -1)
             };
             unsafe {
                 kdx_layout_draw(cr, pl, w - 21.0, 4.0, pal.muted, 0.95);
@@ -1093,7 +1098,7 @@ impl EditorWindow {
             let disp = if self.find_query.is_empty() { "Find..." } else { &self.find_query };
             let col = if self.find_query.is_empty() { pal.muted } else { pal.fg };
             let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, disp.as_ptr() as *const i8, disp.len(), -1)
+                kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, disp.as_ptr() as *const c_char, disp.len(), -1)
             };
             unsafe {
                 kdx_layout_draw(cr, pl, 14.0, fy + 8.5, col, 1.0);
@@ -1103,7 +1108,7 @@ impl EditorWindow {
             // Match count + Aa + ×
             let count_str = format!("{}/{}", self.current_match, self.match_count);
             let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, count_str.as_ptr() as *const i8, count_str.len(), -1)
+                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, count_str.as_ptr() as *const c_char, count_str.len(), -1)
             };
             unsafe {
                 kdx_layout_draw(cr, pl, w - 114.0, fy + 9.0, pal.muted, 1.0);
@@ -1113,7 +1118,7 @@ impl EditorWindow {
             let aa_col = if self.case_sensitive { pal.accent } else { pal.muted };
             let aa = "Aa";
             let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, aa.as_ptr() as *const i8, aa.len(), -1)
+                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, aa.as_ptr() as *const c_char, aa.len(), -1)
             };
             unsafe {
                 kdx_layout_draw(cr, pl, w - 52.0, fy + 9.0, aa_col, 1.0);
@@ -1122,7 +1127,7 @@ impl EditorWindow {
 
             let close = "×";
             let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 11.0, close.as_ptr() as *const i8, close.len(), -1)
+                kdx_layout_new(cr, c_ui_font.as_ptr(), 11.0, close.as_ptr() as *const c_char, close.len(), -1)
             };
             unsafe {
                 kdx_layout_draw(cr, pl, w - 20.0, fy + 5.5, pal.muted, 1.0);
@@ -1140,7 +1145,7 @@ impl EditorWindow {
                 let rdisp = if self.replace_query.is_empty() { "Replace..." } else { &self.replace_query };
                 let rcol = if self.replace_query.is_empty() { pal.muted } else { pal.fg };
                 let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, rdisp.as_ptr() as *const i8, rdisp.len(), -1)
+                    kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, rdisp.as_ptr() as *const c_char, rdisp.len(), -1)
                 };
                 unsafe {
                     kdx_layout_draw(cr, pl, 14.0, ry + 7.5, rcol, 1.0);
@@ -1153,13 +1158,13 @@ impl EditorWindow {
                     kdx_draw_round_rect(cr, w - 72.0, ry + 4.0, 62.0, 22.0, 4.0, pal.accent, 0.85);
                 }
                 let b1 = "Replace";
-                let pl1 = unsafe { kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, b1.as_ptr() as *const i8, b1.len(), -1) };
+                let pl1 = unsafe { kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, b1.as_ptr() as *const c_char, b1.len(), -1) };
                 unsafe {
                     kdx_layout_draw(cr, pl1, w - 127.0, ry + 8.5, pal.fg, 1.0);
                     kdx_layout_free(pl1);
                 }
                 let b2 = "All";
-                let pl2 = unsafe { kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, b2.as_ptr() as *const i8, b2.len(), -1) };
+                let pl2 = unsafe { kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, b2.as_ptr() as *const c_char, b2.len(), -1) };
                 unsafe {
                     kdx_layout_draw(cr, pl2, w - 50.0, ry + 8.5, pal.bg, 1.0);
                     kdx_layout_free(pl2);
@@ -1184,7 +1189,7 @@ impl EditorWindow {
                 cr,
                 c_mono_font.as_ptr(),
                 self.font_size as f64,
-                text_slice.as_ptr() as *const i8,
+                text_slice.as_ptr() as *const c_char,
                 text_slice.len(),
                 wrap,
             )
@@ -1196,16 +1201,19 @@ impl EditorWindow {
             unsafe { kdx_layout_get_size(layout, &mut lw, &mut lh) };
             self.content_height = lh;
 
-            // Keep caret in viewport automatically for small/normal notes
-            let cur = self.buf.cursor().min(text_slice.len());
-            let mut cx = 0.0;
-            let mut cy = 0.0;
-            let mut ch = self.line_height;
-            unsafe { kdx_layout_index_to_pos(layout, cur as i32, &mut cx, &mut cy, &mut ch) };
-            if cy < self.scroll_y {
-                self.scroll_y = cy;
-            } else if cy + ch + PAD_Y * 2.0 > self.scroll_y + vp_h {
-                self.scroll_y = (cy + ch + PAD_Y * 2.0 - vp_h).max(0.0);
+            // Scroll the caret into view only after it moved, not on every repaint,
+            // otherwise mouse-wheel scrolling snaps straight back to the caret.
+            if self.follow_caret {
+                let cur = self.buf.cursor().min(text_slice.len());
+                let mut cx = 0.0;
+                let mut cy = 0.0;
+                let mut ch = self.line_height;
+                unsafe { kdx_layout_index_to_pos(layout, cur as i32, &mut cx, &mut cy, &mut ch) };
+                if cy < self.scroll_y {
+                    self.scroll_y = cy;
+                } else if cy + ch + PAD_Y * 2.0 > self.scroll_y + vp_h {
+                    self.scroll_y = (cy + ch + PAD_Y * 2.0 - vp_h).max(0.0);
+                }
             }
             let max_scroll = (self.content_height - vp_h + PAD_Y * 2.0).max(0.0);
             if self.scroll_y > max_scroll {
@@ -1232,7 +1240,7 @@ impl EditorWindow {
         if self.buf.is_empty() {
             let ph = "Type a note...";
             let pl = unsafe {
-                kdx_layout_new(cr, c_mono_font.as_ptr(), self.font_size as f64, ph.as_ptr() as *const i8, ph.len(), -1)
+                kdx_layout_new(cr, c_mono_font.as_ptr(), self.font_size as f64, ph.as_ptr() as *const c_char, ph.len(), -1)
             };
             unsafe {
                 kdx_layout_draw(cr, pl, origin_x, origin_y, pal.muted, 0.45);
@@ -1299,7 +1307,7 @@ impl EditorWindow {
                 line_ending.label()
             );
             let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, status.as_ptr() as *const i8, status.len(), -1)
+                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, status.as_ptr() as *const c_char, status.len(), -1)
             };
             unsafe {
                 kdx_layout_draw(cr, pl, 10.0, sy + 4.0, pal.muted, 1.0);
@@ -1321,6 +1329,7 @@ impl EditorWindow {
 
         unsafe { kdx_win_end_paint(self.handle, &mut canvas) };
         self.needs_redraw = false;
+        self.follow_caret = false;
     }
 
     fn cursor_line_col(&self) -> (usize, usize) {
@@ -1328,7 +1337,7 @@ impl EditorWindow {
         // Fast bounded scan for huge files
         if cur > 256 * 1024 {
             let ls = self.buf.line_start(cur);
-            return (1, cur - ls + 1);
+            return (1, self.buf.slice_string(ls, cur).chars().count() + 1);
         }
         let mut line = 1usize;
         let mut last_nl = 0usize;
@@ -1338,6 +1347,6 @@ impl EditorWindow {
                 last_nl = i + 1;
             }
         }
-        (line, cur - last_nl + 1)
+        (line, self.buf.slice_string(last_nl, cur).chars().count() + 1)
     }
 }
