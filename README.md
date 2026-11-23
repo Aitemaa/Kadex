@@ -11,6 +11,7 @@
 </p>
 
 <p align="center">
+  <a href="#screenshots">Screenshots</a> ·
   <a href="#features">Features</a> ·
   <a href="#measured-footprint-linux--cachyos--niri">Footprint</a> ·
   <a href="#building">Building</a> ·
@@ -25,6 +26,31 @@
 **Kadex** (*Ka* from Karel + *codex*, Latin for notebook) is a single-binary, zero-bloat, native Rust **Notepad & Sticky Notes** app built for **Linux (Wayland / Niri)** and **Windows**.
 
 No Electron. No WebView2. No XWayland. No GPU context. Pure native OS rendering with a shared zero-dependency Rust core.
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/sticky-dark.png" alt="Six Kadex sticky notes in dark mode, one per palette: Graphite, Amber, Sage, Cobalt, Rose and Iris" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/sticky-light.png" alt="The same six sticky notes in light mode" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="62%"><img src="docs/screenshots/file-mode.png" alt="File mode with find and replace, red caret and status bar, in dark and light palettes"></td>
+    <td width="38%"><img src="docs/screenshots/overlay.png" alt="Overlay scratchpad floating panel"></td>
+  </tr>
+  <tr>
+    <td align="center">File mode: find &amp; replace, status bar</td>
+    <td align="center">Overlay scratchpad</td>
+  </tr>
+</table>
+
+<sub>Rendered offscreen by Kadex's own Cairo/Pango drawing code (<code>KADEX_SNAPSHOT_DIR=out cargo test -p kadex-platform-wl snapshots</code>).</sub>
 
 ---
 
