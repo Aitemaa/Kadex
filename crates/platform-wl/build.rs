@@ -64,7 +64,9 @@ fn main() {
         "xkbcommon",
         "pangocairo",
         "pango",
+        "pangoft2",
         "cairo",
+        "fontconfig",
     ]);
 
     let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
@@ -86,7 +88,11 @@ fn main() {
         }
         cmd.arg("-c").arg(src).arg("-o").arg(&obj);
         let status = cmd.status().expect("failed to invoke C compiler");
-        assert!(status.success(), "C compilation failed for {}", src.display());
+        assert!(
+            status.success(),
+            "C compilation failed for {}",
+            src.display()
+        );
         objects.push(obj);
     }
 
@@ -108,7 +114,9 @@ fn main() {
         "xkbcommon",
         "pangocairo-1.0",
         "pango-1.0",
+        "pangoft2-1.0",
         "cairo",
+        "fontconfig",
         "gobject-2.0",
         "glib-2.0",
     ] {

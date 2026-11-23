@@ -84,10 +84,22 @@ void kdx_clip_rect(void *cr, double x, double y, double w, double h);
 void kdx_save(void *cr);
 void kdx_restore(void *cr);
 void kdx_translate(void *cr, double tx, double ty);
+void kdx_scale(void *cr, double sx, double sy);
+void kdx_stroke_round_rect(void *cr, double x, double y, double w, double h, double r, double lw, uint32_t rgb, double alpha);
+void kdx_clip_round_rect(void *cr, double x, double y, double w, double h, double r);
+void kdx_stroke_circle(void *cr, double cx, double cy, double r, double lw, uint32_t rgb, double alpha);
+void kdx_path_begin(void *cr);
+void kdx_path_move(void *cr, double x, double y);
+void kdx_path_line(void *cr, double x, double y);
+void kdx_path_curve(void *cr, double x1, double y1, double x2, double y2, double x3, double y3);
+void kdx_path_close(void *cr);
+void kdx_path_stroke(void *cr, double lw, uint32_t rgb, double alpha);
+bool kdx_font_register(const char *path);
 
 // Pango text layout helpers
 KdxLayout *kdx_layout_new(void *cr, const char *font_family, double font_size_pt, const char *text, size_t text_len, int32_t wrap_width_px);
 void kdx_layout_free(KdxLayout *layout);
+void kdx_layout_set_subpixel(KdxLayout *layout);
 void kdx_layout_get_size(KdxLayout *layout, double *out_w, double *out_h);
 void kdx_layout_draw(void *cr, KdxLayout *layout, double x, double y, uint32_t rgb, double alpha);
 void kdx_layout_index_to_pos(KdxLayout *layout, int byte_idx, double *out_x, double *out_y, double *out_h);

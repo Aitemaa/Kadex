@@ -46,7 +46,11 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            font_family: String::from(if cfg!(windows) { "Consolas" } else { "monospace" }),
+            font_family: String::from(if cfg!(windows) {
+                "Consolas"
+            } else {
+                "monospace"
+            }),
             font_size: 11.5,
             word_wrap: true,
             theme: ThemeMode::Auto,
@@ -67,7 +71,11 @@ impl Config {
         let mut cfg = Self::default();
         for raw_line in input.lines() {
             let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with(';') || line.starts_with('[') {
+            if line.is_empty()
+                || line.starts_with('#')
+                || line.starts_with(';')
+                || line.starts_with('[')
+            {
                 continue;
             }
             if let Some((k, v)) = line.split_once('=') {
@@ -343,155 +351,278 @@ fn parse_bool(v: &str, default: bool) -> bool {
 }
 
 /// 6 curated palettes (each available in dark and light variants).
+///
+/// Index semantics are stable (`palette = N` in `state.ini`): 0 Graphite (was Obsidian/Paper),
+/// 1 Amber (Amber/Butter), 2 Sage (Sage/Mint), 3 Cobalt (Cobalt/Sky), 4 Rose (Rose/Blush),
+/// 5 Iris (Iris/Lilac).
 pub const PALETTE_COUNT: usize = 6;
 
+/// Kavox brand red. Used for the text caret in every palette.
+pub const RED: u32 = 0xE8262D;
+
+/// Colour tokens of the Kavox / Kapix design family, resolved for one palette and theme.
+///
+/// Palette 0 (Graphite) carries the Kavox tokens verbatim (`field`=bg, `bg`=panel, `header`=surface,
+/// `hover`=surface_2, `border`=line, `border_strong`=line_strong). The other five keep the same
+/// lightness steps and only wash a hue over them, so text contrast is identical in every palette.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub name: &'static str,
-    pub bg: u32,        // 0xRRGGBB
-    pub header: u32,    // 0xRRGGBB
-    pub fg: u32,        // 0xRRGGBB
-    pub muted: u32,     // 0xRRGGBB
-    pub accent: u32,    // 0xRRGGBB
-    pub selection: u32, // 0xRRGGBB
-    pub border: u32,    // 0xRRGGBB
+    /// Recessed field background (Kavox `bg`): find/replace inputs.
+    pub field: u32, // 0xRRGGBB
+    /// Note body (Kavox `panel`).
+    pub bg: u32,
+    /// Header / status bar (Kavox `surface`).
+    pub header: u32,
+    /// Hover fill (Kavox `surface_2`).
+    pub hover: u32,
+    /// 1 px separators (Kavox `line`).
+    pub border: u32,
+    /// Palette-dot ring, hovered outlines (Kavox `line_strong`).
+    pub border_strong: u32,
+    /// Body and primary text (Kavox `text`).
+    pub fg: u32,
+    pub muted: u32,
+    /// Separator dots, disabled glyphs.
+    pub faint: u32,
+    /// Hue-specific colour of the palette dot (and focus accents).
+    pub accent: u32,
+    /// Primary / active fill (Kavox `lit`); also the selection colour.
+    pub lit: u32,
+    /// Content drawn on `lit`.
+    pub on_lit: u32,
+    /// Red for icons/text on `header` (danger hover).
+    pub red_text: u32,
+    /// Alpha (0-255) of `lit` used as the selection highlight (Kavox: 56 dark, 40 light).
+    pub selection_alpha: u8,
+}
+
+impl Palette {
+    /// Text caret colour: Kavox red in every palette (matches the Kadex logo).
+    pub const fn caret(&self) -> u32 {
+        RED
+    }
 }
 
 pub const DARK_PALETTES: [Palette; PALETTE_COUNT] = [
-    // 0: Obsidian (default)
+    // 0: Graphite
     Palette {
-        name: "Obsidian",
-        bg: 0x191B1F,
-        header: 0x22252B,
-        fg: 0xE6E9EF,
-        muted: 0x8B92A0,
-        accent: 0x7AA2F7,
-        selection: 0x32466B,
-        border: 0x2E333D,
+        name: "Graphite",
+        field: 0x141414,
+        bg: 0x1B1B1B,
+        header: 0x222222,
+        hover: 0x2B2B2B,
+        border: 0x2B2B2B,
+        border_strong: 0x3D3D3D,
+        fg: 0xF2F1EE,
+        muted: 0x8F8E89,
+        faint: 0x5C5B57,
+        accent: 0xD6D5D0,
+        lit: 0xF2F1EE,
+        on_lit: 0x141414,
+        red_text: 0xFF4D53,
+        selection_alpha: 56,
     },
     // 1: Amber
     Palette {
         name: "Amber",
-        bg: 0x221E17,
-        header: 0x2E271C,
-        fg: 0xF5EAD6,
-        muted: 0xA8987D,
-        accent: 0xE5B567,
-        selection: 0x524229,
-        border: 0x3D3424,
+        field: 0x17140E,
+        bg: 0x1F1A13,
+        header: 0x272117,
+        hover: 0x322A1E,
+        border: 0x322A1D,
+        border_strong: 0x463B2B,
+        fg: 0xF4F1EB,
+        muted: 0x968D7F,
+        faint: 0x625A4D,
+        accent: 0xF2A93B,
+        lit: 0xF4F1EB,
+        on_lit: 0x17140E,
+        red_text: 0xFF4D53,
+        selection_alpha: 56,
     },
     // 2: Sage
     Palette {
         name: "Sage",
-        bg: 0x18211C,
-        header: 0x202D26,
-        fg: 0xE2EFE7,
-        muted: 0x84A190,
-        accent: 0x73C991,
-        selection: 0x2C4A39,
-        border: 0x2B3D33,
+        field: 0x101612,
+        bg: 0x161D18,
+        header: 0x1B251D,
+        hover: 0x222F25,
+        border: 0x222F25,
+        border_strong: 0x314235,
+        fg: 0xEDF3EE,
+        muted: 0x849287,
+        faint: 0x525F55,
+        accent: 0x8DB596,
+        lit: 0xEDF3EE,
+        on_lit: 0x101612,
+        red_text: 0xFF4D53,
+        selection_alpha: 56,
     },
     // 3: Cobalt
     Palette {
         name: "Cobalt",
-        bg: 0x171D26,
-        header: 0x1E2736,
-        fg: 0xE1EAF7,
-        muted: 0x8395B0,
-        accent: 0x67B0E8,
-        selection: 0x2A4366,
-        border: 0x2A364B,
+        field: 0x101519,
+        bg: 0x161C22,
+        header: 0x1B232B,
+        hover: 0x222C37,
+        border: 0x222C37,
+        border_strong: 0x313F4D,
+        fg: 0xEDF2F7,
+        muted: 0x848F9B,
+        faint: 0x525C67,
+        accent: 0x86A6D6,
+        lit: 0xEDF2F7,
+        on_lit: 0x101519,
+        red_text: 0xFF4D53,
+        selection_alpha: 56,
     },
     // 4: Rose
     Palette {
         name: "Rose",
-        bg: 0x24191D,
-        header: 0x302026,
-        fg: 0xF5E4E9,
-        muted: 0xA98692,
-        accent: 0xEB6F92,
-        selection: 0x542B39,
-        border: 0x422B33,
+        field: 0x191213,
+        bg: 0x221819,
+        header: 0x2B1E20,
+        hover: 0x362628,
+        border: 0x372628,
+        border_strong: 0x4C3739,
+        fg: 0xF7EFF0,
+        muted: 0x9B898A,
+        faint: 0x675658,
+        accent: 0xD98C9D,
+        lit: 0xF7EFF0,
+        on_lit: 0x191213,
+        red_text: 0xFF4D53,
+        selection_alpha: 56,
     },
     // 5: Iris
     Palette {
         name: "Iris",
-        bg: 0x1E1B26,
-        header: 0x282334,
-        fg: 0xEAE6F7,
-        muted: 0x978EB0,
-        accent: 0xBB9AF7,
-        selection: 0x40335C,
-        border: 0x362F47,
+        field: 0x141319,
+        bg: 0x1B1A22,
+        header: 0x23202B,
+        hover: 0x2C2936,
+        border: 0x2C2937,
+        border_strong: 0x3E3A4C,
+        fg: 0xF1F0F6,
+        muted: 0x8F8C9B,
+        faint: 0x5C5967,
+        accent: 0xAA9CDB,
+        lit: 0xF1F0F6,
+        on_lit: 0x141319,
+        red_text: 0xFF4D53,
+        selection_alpha: 56,
     },
 ];
 
 pub const LIGHT_PALETTES: [Palette; PALETTE_COUNT] = [
-    // 0: Paper
+    // 0: Graphite
     Palette {
-        name: "Paper",
-        bg: 0xFAF9F6,
-        header: 0xEFECE6,
-        fg: 0x1E2025,
-        muted: 0x6C727F,
-        accent: 0x2F6FE4,
-        selection: 0xC9DDFB,
-        border: 0xDCD8CE,
+        name: "Graphite",
+        field: 0xEFEEE9,
+        bg: 0xF8F7F4,
+        header: 0xE4E3DE,
+        hover: 0xD9D8D2,
+        border: 0xD8D6CF,
+        border_strong: 0xBDBBB4,
+        fg: 0x191919,
+        muted: 0x696863,
+        faint: 0xA3A19A,
+        accent: 0x4A4A47,
+        lit: 0x191919,
+        on_lit: 0xF4F3EF,
+        red_text: 0xC2161C,
+        selection_alpha: 40,
     },
-    // 1: Butter
+    // 1: Amber
     Palette {
-        name: "Butter",
-        bg: 0xFFF9DB,
-        header: 0xF7ECBA,
-        fg: 0x2B2412,
-        muted: 0x7D6E48,
-        accent: 0xC47F17,
-        selection: 0xF2DB8D,
-        border: 0xE6D79C,
+        name: "Amber",
+        field: 0xF2EDE5,
+        bg: 0xFAF7F2,
+        header: 0xE8E2D9,
+        hover: 0xDED7CC,
+        border: 0xDDD5C9,
+        border_strong: 0xC2BAAD,
+        fg: 0x1B1916,
+        muted: 0x6C6760,
+        faint: 0xA6A098,
+        accent: 0xA86400,
+        lit: 0x1B1916,
+        on_lit: 0xF6F3EE,
+        red_text: 0xC2161C,
+        selection_alpha: 40,
     },
-    // 2: Mint
+    // 2: Sage
     Palette {
-        name: "Mint",
-        bg: 0xEEF8F1,
-        header: 0xDDF0E3,
-        fg: 0x172A1E,
-        muted: 0x52735E,
-        accent: 0x238652,
-        selection: 0xB8E4C7,
-        border: 0xC7E2CF,
+        name: "Sage",
+        field: 0xE8F0EA,
+        bg: 0xF4F9F5,
+        header: 0xDDE6DE,
+        hover: 0xD0DBD2,
+        border: 0xCEDAD0,
+        border_strong: 0xB2BFB5,
+        fg: 0x171A17,
+        muted: 0x636A64,
+        faint: 0x9BA39D,
+        accent: 0x4C7A57,
+        lit: 0x171A17,
+        on_lit: 0xF0F4F1,
+        red_text: 0xC2161C,
+        selection_alpha: 40,
     },
-    // 3: Sky
+    // 3: Cobalt
     Palette {
-        name: "Sky",
-        bg: 0xEEF5FC,
-        header: 0xDDEAF8,
-        fg: 0x162333,
-        muted: 0x556E8A,
-        accent: 0x2270C9,
-        selection: 0xBCD8F7,
-        border: 0xC5DAEE,
+        name: "Cobalt",
+        field: 0xE8EFF6,
+        bg: 0xF4F8FC,
+        header: 0xDCE4EC,
+        hover: 0xD0D9E3,
+        border: 0xCDD7E2,
+        border_strong: 0xB2BCC8,
+        fg: 0x17191C,
+        muted: 0x62696F,
+        faint: 0x9BA2A9,
+        accent: 0x3F6AA5,
+        lit: 0x17191C,
+        on_lit: 0xF0F3F8,
+        red_text: 0xC2161C,
+        selection_alpha: 40,
     },
-    // 4: Blush
+    // 4: Rose
     Palette {
-        name: "Blush",
-        bg: 0xFCF0F3,
-        header: 0xF7DFE6,
-        fg: 0x2E1820,
-        muted: 0x825866,
-        accent: 0xC93B6B,
-        selection: 0xF2BDCE,
-        border: 0xEBCBD5,
+        name: "Rose",
+        field: 0xF6EBEC,
+        bg: 0xFCF5F6,
+        header: 0xECDFE0,
+        hover: 0xE3D4D5,
+        border: 0xE2D2D3,
+        border_strong: 0xC8B6B8,
+        fg: 0x1C1818,
+        muted: 0x6F6566,
+        faint: 0xA99E9F,
+        accent: 0xB04A63,
+        lit: 0x1C1818,
+        on_lit: 0xF8F1F2,
+        red_text: 0xC2161C,
+        selection_alpha: 40,
     },
-    // 5: Lilac
+    // 5: Iris
     Palette {
-        name: "Lilac",
-        bg: 0xF4F0FC,
-        header: 0xE8E0F8,
-        fg: 0x211933,
-        muted: 0x685A85,
-        accent: 0x794BC4,
-        selection: 0xD4C2F5,
-        border: 0xD8CCF0,
+        name: "Iris",
+        field: 0xEEEDF5,
+        bg: 0xF7F6FB,
+        header: 0xE3E1EC,
+        hover: 0xD8D6E2,
+        border: 0xD7D4E1,
+        border_strong: 0xBCB9C7,
+        fg: 0x19181C,
+        muted: 0x68676F,
+        faint: 0xA1A0A9,
+        accent: 0x6F5CB0,
+        lit: 0x19181C,
+        on_lit: 0xF3F2F7,
+        red_text: 0xC2161C,
+        selection_alpha: 40,
     },
 ];
 
@@ -544,6 +675,82 @@ mod tests {
         let ini = st.to_ini();
         let parsed = AppState::parse_ini(&ini);
         let n = parsed.notes.get("20261123-01").unwrap();
-        assert_eq!((n.x, n.y, n.width, n.height, n.palette, n.pinned), (40, 80, 400, 300, 3, true));
+        assert_eq!(
+            (n.x, n.y, n.width, n.height, n.palette, n.pinned),
+            (40, 80, 400, 300, 3, true)
+        );
+    }
+
+    fn channel(c: u32) -> f64 {
+        let v = c as f64 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    fn luminance(rgb: u32) -> f64 {
+        0.2126 * channel((rgb >> 16) & 0xFF)
+            + 0.7152 * channel((rgb >> 8) & 0xFF)
+            + 0.0722 * channel(rgb & 0xFF)
+    }
+
+    /// WCAG contrast ratio.
+    fn contrast(a: u32, b: u32) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn graphite_is_kavox_tokens() {
+        let d = palette(0, true);
+        assert_eq!(d.name, "Graphite");
+        assert_eq!(
+            (d.field, d.bg, d.header, d.hover, d.border, d.border_strong),
+            (0x141414, 0x1B1B1B, 0x222222, 0x2B2B2B, 0x2B2B2B, 0x3D3D3D)
+        );
+        assert_eq!(
+            (d.fg, d.muted, d.faint, d.lit),
+            (0xF2F1EE, 0x8F8E89, 0x5C5B57, 0xF2F1EE)
+        );
+        assert_eq!(d.selection_alpha, 56);
+        let l = palette(0, false);
+        assert_eq!(l.name, "Graphite");
+        assert_eq!(
+            (l.field, l.bg, l.header, l.hover, l.border, l.border_strong),
+            (0xEFEEE9, 0xF8F7F4, 0xE4E3DE, 0xD9D8D2, 0xD8D6CF, 0xBDBBB4)
+        );
+        assert_eq!(
+            (l.fg, l.muted, l.faint, l.on_lit),
+            (0x191919, 0x696863, 0xA3A19A, 0xF4F3EF)
+        );
+        assert_eq!(l.selection_alpha, 40);
+    }
+
+    #[test]
+    fn palettes_keep_text_contrast() {
+        for dark in [true, false] {
+            for i in 0..PALETTE_COUNT {
+                let p = palette(i, dark);
+                // WCAG AAA for body text, AA for secondary text on the note body.
+                assert!(contrast(p.fg, p.bg) >= 7.0, "{} fg", p.name);
+                assert!(contrast(p.muted, p.bg) >= 4.5, "{} muted", p.name);
+                assert!(contrast(p.fg, p.header) >= 7.0, "{} header fg", p.name);
+                // The Kavox-red caret must stay visible on the note body.
+                assert!(contrast(p.caret(), p.bg) >= 3.0, "{} caret", p.name);
+            }
+        }
+    }
+
+    #[test]
+    fn palette_names_are_stable_per_index() {
+        let names = ["Graphite", "Amber", "Sage", "Cobalt", "Rose", "Iris"];
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(palette(i, true).name, *n);
+            assert_eq!(palette(i, false).name, *n);
+        }
+        // Existing `palette = N` values keep working, even out of range.
+        assert_eq!(palette(PALETTE_COUNT + 2, true).name, "Sage");
     }
 }

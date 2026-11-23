@@ -15,6 +15,8 @@
 #include <xkbcommon/xkbcommon.h>
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
+#include <pango/pangofc-fontmap.h>
+#include <fontconfig/fontconfig.h>
 
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol.h"
@@ -412,6 +414,10 @@ static void ptr_leave(void *data, struct wl_pointer *ptr, uint32_t serial, struc
     (void)serial;
     KdxApp *app = (KdxApp *)data;
     if (app->ptr_focus == win_from_surface(app, surface)) {
+        // Tell the view the pointer left (it clears hover states); -1e6 is the "left" sentinel.
+        if (app_owns_win(app, app->ptr_focus) && app->cbs.on_pointer_motion) {
+            app->cbs.on_pointer_motion(app->cbs.userdata, app->ptr_focus->id, -1.0e6, -1.0e6);
+        }
         app->ptr_focus = NULL;
     }
 }
@@ -1268,18 +1274,74 @@ void kdx_draw_rect(void *cr_p, double x, double y, double w, double h, uint32_t 
     cairo_fill(cr);
 }
 
-void kdx_draw_round_rect(void *cr_p, double x, double y, double w, double h, double r, uint32_t rgb, double alpha) {
-    cairo_t *cr = (cairo_t *)cr_p;
-    if (r > w * 0.5) r = w * 0.5;
-    if (r > h * 0.5) r = h * 0.5;
-    set_rgb(cr, rgb, alpha);
+static void round_rect_path(cairo_t *cr, double x, double y, double w, double h, double r) {
+    if (r > w / 2.0) r = w / 2.0;
+    if (r > h / 2.0) r = h / 2.0;
     cairo_new_sub_path(cr);
     cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2.0, 0);
     cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2.0);
     cairo_arc(cr, x + r, y + h - r, r, M_PI / 2.0, M_PI);
     cairo_arc(cr, x + r, y + r, r, M_PI, 3.0 * M_PI / 2.0);
     cairo_close_path(cr);
+}
+
+void kdx_draw_round_rect(void *cr_p, double x, double y, double w, double h, double r, uint32_t rgb, double alpha) {
+    cairo_t *cr = (cairo_t *)cr_p;
+    set_rgb(cr, rgb, alpha);
+    round_rect_path(cr, x, y, w, h, r);
     cairo_fill(cr);
+}
+
+void kdx_stroke_round_rect(void *cr_p, double x, double y, double w, double h, double r, double lw, uint32_t rgb, double alpha) {
+    cairo_t *cr = (cairo_t *)cr_p;
+    set_rgb(cr, rgb, alpha);
+    cairo_set_line_width(cr, lw);
+    round_rect_path(cr, x, y, w, h, r);
+    cairo_stroke(cr);
+}
+
+void kdx_clip_round_rect(void *cr_p, double x, double y, double w, double h, double r) {
+    cairo_t *cr = (cairo_t *)cr_p;
+    round_rect_path(cr, x, y, w, h, r);
+    cairo_clip(cr);
+}
+
+void kdx_stroke_circle(void *cr_p, double cx, double cy, double r, double lw, uint32_t rgb, double alpha) {
+    cairo_t *cr = (cairo_t *)cr_p;
+    set_rgb(cr, rgb, alpha);
+    cairo_set_line_width(cr, lw);
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, cx, cy, r, 0, 2.0 * M_PI);
+    cairo_stroke(cr);
+}
+
+// Icon paths: build with move/line/curve/close, then stroke (round caps and joins).
+void kdx_path_begin(void *cr_p) { cairo_new_path((cairo_t *)cr_p); }
+void kdx_path_move(void *cr_p, double x, double y) { cairo_move_to((cairo_t *)cr_p, x, y); }
+void kdx_path_line(void *cr_p, double x, double y) { cairo_line_to((cairo_t *)cr_p, x, y); }
+void kdx_path_curve(void *cr_p, double x1, double y1, double x2, double y2, double x3, double y3) {
+    cairo_curve_to((cairo_t *)cr_p, x1, y1, x2, y2, x3, y3);
+}
+void kdx_path_close(void *cr_p) { cairo_close_path((cairo_t *)cr_p); }
+void kdx_path_stroke(void *cr_p, double lw, uint32_t rgb, double alpha) {
+    cairo_t *cr = (cairo_t *)cr_p;
+    set_rgb(cr, rgb, alpha);
+    cairo_set_line_width(cr, lw);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_stroke(cr);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_MITER);
+}
+
+// Makes a private font file visible to Pango without installing it system-wide.
+// Returns false (and changes nothing) if fontconfig rejects the file.
+bool kdx_font_register(const char *path) {
+    if (!path) return false;
+    if (!FcConfigAppFontAddFile(NULL, (const FcChar8 *)path)) return false;
+    PangoFontMap *map = pango_cairo_font_map_get_default();
+    if (map && PANGO_IS_FC_FONT_MAP(map)) pango_fc_font_map_config_changed(PANGO_FC_FONT_MAP(map));
+    return true;
 }
 
 void kdx_draw_circle(void *cr_p, double cx, double cy, double r, uint32_t rgb, double alpha) {
@@ -1307,6 +1369,7 @@ void kdx_clip_rect(void *cr_p, double x, double y, double w, double h) {
 void kdx_save(void *cr_p) { cairo_save((cairo_t *)cr_p); }
 void kdx_restore(void *cr_p) { cairo_restore((cairo_t *)cr_p); }
 void kdx_translate(void *cr_p, double tx, double ty) { cairo_translate((cairo_t *)cr_p, tx, ty); }
+void kdx_scale(void *cr_p, double sx, double sy) { cairo_scale((cairo_t *)cr_p, sx, sy); }
 
 KdxLayout *kdx_layout_new(void *cr_p, const char *font_family, double font_size_pt,
                           const char *text, size_t text_len, int32_t wrap_width_px) {
@@ -1330,6 +1393,13 @@ KdxLayout *kdx_layout_new(void *cr_p, const char *font_family, double font_size_
     KdxLayout *kl = (KdxLayout *)malloc(sizeof(KdxLayout));
     kl->layout = pl;
     return kl;
+}
+
+// UI chrome text: fractional glyph advances (no integer rounding) so small labels keep even spacing.
+void kdx_layout_set_subpixel(KdxLayout *kl) {
+    if (kl && kl->layout) {
+        pango_context_set_round_glyph_positions(pango_layout_get_context(kl->layout), FALSE);
+    }
 }
 
 void kdx_layout_free(KdxLayout *kl) {

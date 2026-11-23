@@ -25,7 +25,8 @@ Kadex/
 │   ├── core/          # 100% OS-agnostic, zero external deps
 │   │   ├── buffer.rs  # UTF-8 gap buffer + multi-level undo/redo + checkbox toggle
 │   │   ├── storage.rs # UTF-8/UTF-16/EOL detection, atomic save, notes/archive, portable.ini
-│   │   ├── config.rs  # Hand-rolled INI parser/writer + 6 dark/light palettes
+│   │   ├── config.rs  # Hand-rolled INI parser/writer + 6 dark/light palettes (Kavox design tokens)
+│   │   ├── icons.rs   # Lucide-style stroked icon paths (24 grid), shared by both frontends
 │   │   ├── search.rs  # Plain-text case-sensitive/insensitive Find & Replace
 │   │   └── ipc.rs     # Cross-platform line-based IPC protocol
 │   ├── platform-wl/   # Pure Wayland (wl_shm + xdg-shell + xdg-decoration + fractional-scale + viewporter + primary-selection + text-input-v3 + wlr-layer-shell + Pango/Cairo)
@@ -48,3 +49,13 @@ Kadex/
 - `kadex open <id>` — open/focus a specific sticky note
 - `kadex overlay` — toggle centered `zwlr_layer_shell_v1` overlay scratchpad
 - `kadex quit` — flush dirty notes atomically and exit daemon
+
+## 5. Visual Design (Kavox family)
+
+Kadex belongs to the same product family as Kavox and Kapix and copies its design system rather than inventing one:
+
+- **Palettes:** 6 palettes x dark/light, indexed `0..5` (stored as `palette = N`, indices never change meaning): **Graphite** (Kavox neutral tokens verbatim), **Amber**, **Sage**, **Cobalt**, **Rose**, **Iris** (same lightness steps with a faint hue wash; body text >= 7:1, secondary text >= 4.5:1 in every palette). Note body = Kavox `panel`, header/status bar = `surface`, hover = `surface_2`, hairlines = `line`.
+- **Caret and selection:** caret is Kavox red `#E8262D` in every palette; selection is `lit` at alpha 56 (dark) / 40 (light).
+- **Chrome typography:** Archivo Medium (SIL OFL 1.1, Latin subset, ~23 KB) is embedded and used for header title, find bar and status bar only. Note text keeps the user's `font_family` / `font_size` (default `monospace`, `Consolas` on Windows). Linux registers the font with fontconfig for this process only (written once to `$XDG_RUNTIME_DIR/kadex/`); Windows uses `AddFontMemResourceEx`. If loading fails, the UI falls back to the system sans-serif (Segoe UI on Windows).
+- **Chrome:** 28 px header (`surface`, 1 px `line` bottom border), 24 px icon buttons (radius 7, hover `surface_2`, danger hover = red tint + `red_text`, active/pinned = `lit` fill), stroked lucide icons (stroke 2/24, round caps), palette dot = accent fill with a `line_strong` ring. The Wayland overlay is a `panel` card, radius 20, with a soft shadow.
+- **Binary size:** the design system costs about +31 KB on Linux (embedded font, icon paths, shadow/clip helpers): ~517 KB for the stable release build (was ~486 KB). The stable build was already above the 350 KB MVP budget in section 2; the nightly `build-std` build remains the route to it.
