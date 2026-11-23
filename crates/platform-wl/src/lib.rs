@@ -2,7 +2,10 @@
 
 mod editor_view;
 mod ffi;
+mod fonts;
 mod ipc_unix;
+#[cfg(test)]
+mod snapshot_tests;
 
 use std::ffi::{c_char, c_double, c_int, c_void, CString};
 use std::path::PathBuf;
@@ -11,9 +14,11 @@ use std::time::{Duration, Instant};
 
 use kadex_core::config::{NoteWindowState, ThemeMode};
 use kadex_core::ipc::IpcCommand;
-use kadex_core::storage::{load_text_file, save_text_file, AppPaths, Encoding, LineEnding, Storage};
+use kadex_core::storage::{
+    load_text_file, save_text_file, AppPaths, Encoding, LineEnding, Storage,
+};
 
-use crate::editor_view::{EditorWindow, ViewAction, WindowMode};
+use crate::editor_view::{EditorWindow, ViewAction, WindowMode, OVERLAY_INSET};
 use crate::ffi::*;
 use crate::ipc_unix::IpcServer;
 
@@ -93,7 +98,14 @@ impl Daemon {
         self.windows.iter_mut().find(|w| w.id == id)
     }
 
-    fn create_native_surface(&self, id: u64, mode: &WindowMode, title: &str, w: i32, h: i32) -> *mut KdxWin {
+    fn create_native_surface(
+        &self,
+        id: u64,
+        mode: &WindowMode,
+        title: &str,
+        w: i32,
+        h: i32,
+    ) -> *mut KdxWin {
         let (kind, app_id) = match mode {
             WindowMode::Sticky { .. } => (KDX_WIN_XDG, "kadex.sticky"),
             WindowMode::File { .. } => (KDX_WIN_XDG, "kadex.editor"),
@@ -101,15 +113,27 @@ impl Daemon {
         };
         let c_app_id = CString::new(app_id).unwrap();
         let c_title = CString::new(title).unwrap_or_else(|_| CString::new("Kadex").unwrap());
-        unsafe { kdx_win_create(self.app, id, kind, c_app_id.as_ptr(), c_title.as_ptr(), w, h) }
+        unsafe {
+            kdx_win_create(
+                self.app,
+                id,
+                kind,
+                c_app_id.as_ptr(),
+                c_title.as_ptr(),
+                w,
+                h,
+            )
+        }
     }
 
     fn spawn_sticky(&mut self, note_id: Option<String>) -> u64 {
         let id_str = note_id.unwrap_or_else(|| self.storage.new_note_id());
         // If already tracked, show it
-        if let Some(idx) = self.windows.iter().position(|w| {
-            matches!(&w.mode, WindowMode::Sticky { note_id } if note_id == &id_str)
-        }) {
+        if let Some(idx) = self
+            .windows
+            .iter()
+            .position(|w| matches!(&w.mode, WindowMode::Sticky { note_id } if note_id == &id_str))
+        {
             if !self.windows[idx].visible || self.windows[idx].handle.is_null() {
                 let wid = self.windows[idx].id;
                 let title = self.windows[idx].window_title();
@@ -126,12 +150,23 @@ impl Daemon {
 
         let text = self.storage.load_note(&id_str).unwrap_or_default();
         let saved = self.storage.state.notes.get(&id_str).cloned();
-        let width = saved.as_ref().map(|s| s.width).unwrap_or(self.storage.config.sticky_width) as i32;
-        let height = saved.as_ref().map(|s| s.height).unwrap_or(self.storage.config.sticky_height) as i32;
-        let pal_idx = saved.as_ref().map(|s| s.palette).unwrap_or(self.storage.config.default_palette);
+        let width = saved
+            .as_ref()
+            .map(|s| s.width)
+            .unwrap_or(self.storage.config.sticky_width) as i32;
+        let height = saved
+            .as_ref()
+            .map(|s| s.height)
+            .unwrap_or(self.storage.config.sticky_height) as i32;
+        let pal_idx = saved
+            .as_ref()
+            .map(|s| s.palette)
+            .unwrap_or(self.storage.config.default_palette);
 
         let win_id = self.alloc_id();
-        let mode = WindowMode::Sticky { note_id: id_str.clone() };
+        let mode = WindowMode::Sticky {
+            note_id: id_str.clone(),
+        };
         let handle = self.create_native_surface(win_id, &mode, "Kadex Note", width, height);
 
         let win = EditorWindow::new(
@@ -152,9 +187,11 @@ impl Daemon {
 
         // Persist initial note file & state entry
         let _ = self.storage.save_note(&id_str, &text);
-        self.storage.state.notes.entry(id_str.clone()).or_insert_with(|| {
-            NoteWindowState::new(id_str, pal_idx, width as u32, height as u32)
-        });
+        self.storage
+            .state
+            .notes
+            .entry(id_str.clone())
+            .or_insert_with(|| NoteWindowState::new(id_str, pal_idx, width as u32, height as u32));
         let _ = self.storage.save_state();
 
         self.windows.push(win);
@@ -167,10 +204,18 @@ impl Daemon {
         let (text, encoding, line_ending) = if path.exists() {
             match load_text_file(&path) {
                 Ok(loaded) => (loaded.text, loaded.encoding, loaded.line_ending),
-                Err(_) => (String::new(), Encoding::Utf8, LineEnding::platform_default()),
+                Err(_) => (
+                    String::new(),
+                    Encoding::Utf8,
+                    LineEnding::platform_default(),
+                ),
             }
         } else {
-            (String::new(), Encoding::Utf8, LineEnding::platform_default())
+            (
+                String::new(),
+                Encoding::Utf8,
+                LineEnding::platform_default(),
+            )
         };
 
         let win_id = self.alloc_id();
@@ -181,7 +226,10 @@ impl Daemon {
         };
         let w = self.storage.config.editor_width as i32;
         let h = self.storage.config.editor_height as i32;
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("Untitled");
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("Untitled");
         let title = format!("{name} — Kadex");
         let handle = self.create_native_surface(win_id, &mode, &title, w, h);
 
@@ -215,8 +263,9 @@ impl Daemon {
         let text = self.storage.load_note(&note_id).unwrap_or_default();
         let win_id = self.alloc_id();
         let mode = WindowMode::Overlay { note_id };
-        let w = 560;
-        let h = 380;
+        // The surface carries a transparent margin for the panel's drop shadow.
+        let w = 560 + 2 * OVERLAY_INSET;
+        let h = 380 + 2 * OVERLAY_INSET;
         let handle = self.create_native_surface(win_id, &mode, "Kadex Scratchpad", w, h);
         let win = EditorWindow::new(
             win_id,
@@ -337,7 +386,10 @@ impl Daemon {
 
     fn flush_all_sticky(&mut self) {
         for i in 0..self.windows.len() {
-            if matches!(self.windows[i].mode, WindowMode::Sticky { .. } | WindowMode::Overlay { .. }) {
+            if matches!(
+                self.windows[i].mode,
+                WindowMode::Sticky { .. } | WindowMode::Overlay { .. }
+            ) {
                 self.flush_window(i);
             }
         }
@@ -661,7 +713,12 @@ extern "C" fn cb_key(
     d.caret_next_blink = Some(Instant::now() + Duration::from_millis(530));
 }
 
-extern "C" fn cb_ime_commit(ud: *mut c_void, win_id: u64, utf8_ptr: *const c_char, utf8_len: usize) {
+extern "C" fn cb_ime_commit(
+    ud: *mut c_void,
+    win_id: u64,
+    utf8_ptr: *const c_char,
+    utf8_len: usize,
+) {
     if utf8_ptr.is_null() || utf8_len == 0 {
         return;
     }
@@ -702,7 +759,13 @@ extern "C" fn cb_pointer_button(
     d.apply_view_action(win_id, action);
 }
 
-extern "C" fn cb_pointer_scroll(ud: *mut c_void, win_id: u64, dx: c_double, dy: c_double, mods: u32) {
+extern "C" fn cb_pointer_scroll(
+    ud: *mut c_void,
+    win_id: u64,
+    dx: c_double,
+    dy: c_double,
+    mods: u32,
+) {
     let d = unsafe { &mut *(ud as *mut Daemon) };
     if let Some(w) = d.find_win_mut(win_id) {
         w.handle_scroll(dx, dy, mods);
@@ -718,8 +781,14 @@ extern "C" fn cb_repeat_info(ud: *mut c_void, rate: i32, delay_ms: i32) {
 fn arm_timerfd(tfd: c_int, deadline: Option<Instant>) {
     let spec = match deadline {
         None => ITimerSpec {
-            it_interval: TimeSpec { tv_sec: 0, tv_nsec: 0 },
-            it_value: TimeSpec { tv_sec: 0, tv_nsec: 0 },
+            it_interval: TimeSpec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            it_value: TimeSpec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
         },
         Some(t) => {
             let now = Instant::now();
@@ -729,7 +798,10 @@ fn arm_timerfd(tfd: c_int, deadline: Option<Instant>) {
                 Duration::from_millis(1)
             };
             ITimerSpec {
-                it_interval: TimeSpec { tv_sec: 0, tv_nsec: 0 },
+                it_interval: TimeSpec {
+                    tv_sec: 0,
+                    tv_nsec: 0,
+                },
                 it_value: TimeSpec {
                     tv_sec: dur.as_secs() as i64,
                     tv_nsec: (dur.subsec_nanos() as i64).max(1_000_000),
@@ -742,6 +814,8 @@ fn arm_timerfd(tfd: c_int, deadline: Option<Instant>) {
 
 pub fn run_daemon(initial_cmd: IpcCommand) -> Result<(), String> {
     let storage = Storage::open().map_err(|e| format!("storage init failed: {e}"))?;
+    // Must run before the first Pango layout so the font map picks up the private UI font.
+    fonts::register_ui_font();
     let ipc = IpcServer::bind(&storage.paths.socket_path)
         .map_err(|e| format!("failed to bind IPC socket: {e}"))?;
 
@@ -819,9 +893,21 @@ pub fn run_daemon(initial_cmd: IpcCommand) -> Result<(), String> {
         arm_timerfd(tfd, daemon.next_deadline());
 
         let mut fds = [
-            PollFd { fd: wl_fd, events: POLLIN, revents: 0 },
-            PollFd { fd: ipc_fd, events: POLLIN, revents: 0 },
-            PollFd { fd: tfd, events: POLLIN, revents: 0 },
+            PollFd {
+                fd: wl_fd,
+                events: POLLIN,
+                revents: 0,
+            },
+            PollFd {
+                fd: ipc_fd,
+                events: POLLIN,
+                revents: 0,
+            },
+            PollFd {
+                fd: tfd,
+                events: POLLIN,
+                revents: 0,
+            },
         ];
 
         let r = unsafe { poll(fds.as_mut_ptr(), fds.len() as u64, -1) };

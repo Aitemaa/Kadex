@@ -1,5 +1,6 @@
 //! Pure Win32 + RichEdit + DWM + Tray + Global Hotkey + Named Mutex backend for Kadex.
 
+mod gdip;
 mod theme;
 #[cfg(target_os = "windows")]
 mod window;
@@ -46,25 +47,27 @@ mod win_impl {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
         DestroyMenu, DispatchMessageW, FindWindowExW, GetAncestor, GetCursorPos, GetMessageW,
-        GetSystemMetrics, LoadIconW, LoadImageW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
-        SetWindowPos, TrackPopupMenu, TranslateMessage, ASFW_ANY, EN_CHANGE, GA_ROOT,
-        HWND_MESSAGE, IDI_APPLICATION, MF_STRING, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
-        HICON, IMAGE_ICON, LR_DEFAULTCOLOR, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON,
+        GetSystemMetrics, LoadIconW, LoadImageW, PostQuitMessage, RegisterClassW, SendMessageW,
+        SetForegroundWindow, SetWindowPos, TrackPopupMenu, TranslateMessage, ASFW_ANY, EN_CHANGE,
+        GA_ROOT, HICON, HWND_MESSAGE, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR, MF_STRING, MSG,
+        SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SWP_NOACTIVATE, SWP_NOZORDER,
         TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_DESTROY,
         WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSW,
+        WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSW,
     };
 
     use crate::theme::{detect_dark_mode, to_wide_null};
     use crate::window::{
-        create_note_window, load_richedit_dll, window_from_hwnd, HeaderHit, NoteWindow, WinMode,
-        NOTE_CLASS_NAME, TIMER_AUTOSAVE,
+        create_note_window, install_ui_font, load_richedit_dll, remove_ui_font, window_from_hwnd,
+        HeaderHit, NoteWindow, WinMode, NOTE_CLASS_NAME, TIMER_AUTOSAVE,
     };
 
     const MUTEX_NAME: &str = "Local\\KadexSingleInstanceMutex";
     const IPC_CLASS_NAME: &str = "KadexIpcHostWindow";
     const HOTKEY_TOGGLE_ID: i32 = 1;
     const WM_TRAY_ICON: u32 = WM_APP + 1;
+    /// Sent by `TrackMouseEvent(TME_LEAVE)` when the pointer leaves the client area.
+    const WM_MOUSELEAVE: u32 = 0x02A3;
     const COPYDATA_MAGIC: usize = 0x4B44_5831; // "KDX1"
 
     struct WinDaemon {
@@ -142,6 +145,7 @@ mod win_impl {
             let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         }
         load_richedit_dll();
+        install_ui_font();
 
         let mutex_w = to_wide_null(MUTEX_NAME);
         let _mutex = unsafe { CreateMutexW(std::ptr::null(), 1, mutex_w.as_ptr()) };
@@ -236,6 +240,8 @@ mod win_impl {
             flush_all();
             UnregisterHotKey(ipc_hwnd, HOTKEY_TOGGLE_ID);
             Shell_NotifyIconW(NIM_DELETE, &nid);
+            crate::gdip::shutdown();
+            remove_ui_font();
         }
 
         Ok(())
@@ -427,6 +433,7 @@ mod win_impl {
     fn flush_note(storage: &mut Storage, note: &mut NoteWindow) {
         note.cancel_autosave();
         let text = note.get_text();
+        note.refresh_title(&text);
         match &note.mode {
             WinMode::Sticky { note_id } => {
                 let _ = storage.save_note(note_id, &text);
@@ -656,6 +663,21 @@ mod win_impl {
                     }
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_MOUSEMOVE => {
+                if let Some(note) = window_from_hwnd(hwnd) {
+                    note.on_mouse_move(POINT {
+                        x: (lparam & 0xFFFF) as i16 as i32,
+                        y: ((lparam >> 16) & 0xFFFF) as i16 as i32,
+                    });
+                }
+                0
+            }
+            WM_MOUSELEAVE => {
+                if let Some(note) = window_from_hwnd(hwnd) {
+                    note.on_mouse_leave();
+                }
+                0
             }
             WM_LBUTTONDOWN => {
                 if let Some(note) = window_from_hwnd(hwnd) {

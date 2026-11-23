@@ -6,7 +6,7 @@ pkgdesc="Ultra-lean native Rust Notepad & Sticky Notes for Wayland/Niri (wl_shm 
 arch=('x86_64')
 url="https://github.com/Aitemaa/Kadex"
 license=('MIT')
-depends=('wayland' 'libxkbcommon' 'pango' 'cairo' 'glib2')
+depends=('wayland' 'libxkbcommon' 'pango' 'cairo' 'glib2' 'fontconfig')
 makedepends=('rust' 'cargo' 'pkgconf' 'wayland')
 source=()
 
@@ -23,4 +23,5 @@ package() {
     install -Dm644 "assets/icon.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/kadex.svg"
     install -Dm644 "packaging/niri/kadex.kdl" "$pkgdir/usr/share/doc/kadex/niri-kadex.kdl"
     install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "assets/fonts/OFL.txt" "$pkgdir/usr/share/licenses/$pkgname/OFL-Archivo.txt"
 }

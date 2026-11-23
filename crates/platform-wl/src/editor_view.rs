@@ -5,11 +5,13 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use kadex_core::buffer::GapBuffer;
-use kadex_core::config::{palette, Palette, PALETTE_COUNT};
+use kadex_core::config::{palette, Palette, PALETTE_COUNT, RED};
+use kadex_core::icons::{Icon, Seg, GRID, STROKE};
 use kadex_core::search;
 use kadex_core::storage::{Encoding, LineEnding};
 
 use crate::ffi::*;
+use crate::fonts::UI_FAMILY;
 
 pub const HEADER_H: f64 = 28.0;
 pub const STATUS_H: f64 = 22.0;
@@ -17,11 +19,43 @@ pub const PAD_X: f64 = 12.0;
 pub const PAD_Y: f64 = 10.0;
 const LARGE_FILE_THRESHOLD: usize = 32 * 1024;
 
+// Kavox family geometry (logical px).
+/// Icon button (24 x 24, radius 7) inside the 28 px header; the glyph is 16 px (stroke 2 / 24 grid).
+const BTN: f64 = 24.0;
+const BTN_RADIUS: f64 = 7.0;
+const ICON_PX: f64 = 16.0;
+/// Overlay panel radius (Kavox `RADIUS_PANEL`).
+const RADIUS_PANEL: f64 = 20.0;
+/// Transparent margin around the overlay panel that holds its drop shadow.
+pub const OVERLAY_INSET: i32 = 32;
+/// Header chrome text (Archivo Medium) in pt; 9 pt = 12 px.
+const UI_PT: f64 = 9.0;
+const STATUS_PT: f64 = 8.5;
+/// Alpha (0-255) of the red hover tint behind the danger button (Kavox: 30).
+const DANGER_TINT: f64 = 30.0 / 255.0;
+
+/// A clickable control in the header bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HdrBtn {
+    New,
+    Dot(usize),
+    Archive,
+    Close,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WindowMode {
-    Sticky { note_id: String },
-    File { path: PathBuf, encoding: Encoding, line_ending: LineEnding },
-    Overlay { note_id: String },
+    Sticky {
+        note_id: String,
+    },
+    File {
+        path: PathBuf,
+        encoding: Encoding,
+        line_ending: LineEnding,
+    },
+    Overlay {
+        note_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +104,10 @@ pub struct EditorWindow {
     pub dragging_text: bool,
     pub hover_x: f64,
     pub hover_y: f64,
+    /// Header control under the pointer (hover state).
+    pub hover: Option<HdrBtn>,
+    /// Sticky header title (first line of the note), cached per buffer version.
+    title_cache: Option<(u64, String)>,
     pub last_click_time: Option<Instant>,
     pub click_streak: u8,
 
@@ -113,7 +151,8 @@ impl EditorWindow {
             let end = buf.len();
             buf.set_cursor(end, false);
         }
-        let c_font = CString::new(font_family.as_str()).unwrap_or_else(|_| CString::new("monospace").unwrap());
+        let c_font = CString::new(font_family.as_str())
+            .unwrap_or_else(|_| CString::new("monospace").unwrap());
         let line_height = unsafe { kdx_measure_line_height(c_font.as_ptr(), font_size as f64) };
         let total_lines = initial_text.bytes().filter(|&b| b == b'\n').count() + 1;
         Self {
@@ -142,6 +181,8 @@ impl EditorWindow {
             dragging_text: false,
             hover_x: 0.0,
             hover_y: 0.0,
+            hover: None,
+            title_cache: None,
             last_click_time: None,
             click_streak: 0,
             find_open: false,
@@ -169,7 +210,10 @@ impl EditorWindow {
     }
 
     pub fn has_header(&self) -> bool {
-        matches!(self.mode, WindowMode::Sticky { .. } | WindowMode::Overlay { .. })
+        matches!(
+            self.mode,
+            WindowMode::Sticky { .. } | WindowMode::Overlay { .. }
+        )
     }
 
     pub fn has_status_bar(&self) -> bool {
@@ -177,7 +221,11 @@ impl EditorWindow {
     }
 
     pub fn header_height(&self) -> f64 {
-        if self.has_header() { HEADER_H } else { 0.0 }
+        if self.has_header() {
+            HEADER_H
+        } else {
+            0.0
+        }
     }
 
     pub fn find_bar_height(&self) -> f64 {
@@ -191,20 +239,80 @@ impl EditorWindow {
     }
 
     pub fn status_height(&self) -> f64 {
-        if self.has_status_bar() { STATUS_H } else { 0.0 }
+        if self.has_status_bar() {
+            STATUS_H
+        } else {
+            0.0
+        }
     }
 
     pub fn text_top(&self) -> f64 {
         self.header_height() + self.find_bar_height()
     }
 
+    /// Margin between the surface edge and the visible panel (overlay drop shadow only).
+    fn inset(&self) -> f64 {
+        if self.is_overlay() {
+            OVERLAY_INSET as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Size of the visible panel in logical px (the surface minus the shadow margin).
+    fn view_size(&self) -> (f64, f64) {
+        let i = self.inset() * 2.0;
+        (self.width as f64 - i, self.height as f64 - i)
+    }
+
+    /// Side margin of the header controls: the overlay's rounded corners need more room.
+    fn header_pad(&self) -> f64 {
+        if self.is_overlay() {
+            10.0
+        } else {
+            0.0
+        }
+    }
+
+    fn dots_start(&self) -> f64 {
+        if self.is_sticky() {
+            36.0
+        } else {
+            14.0 + self.header_pad()
+        }
+    }
+
+    /// Hit-testing of the header controls, in panel coordinates.
+    fn header_hit(&self, x: f64, y: f64) -> Option<HdrBtn> {
+        if !self.has_header() || !(0.0..HEADER_H).contains(&y) {
+            return None;
+        }
+        let (w, _) = self.view_size();
+        let pad = self.header_pad();
+        if x >= w - 28.0 - pad {
+            return Some(HdrBtn::Close);
+        }
+        if self.is_sticky() {
+            if x >= w - 52.0 - pad {
+                return Some(HdrBtn::Archive);
+            }
+            if (4.0..=28.0).contains(&x) {
+                return Some(HdrBtn::New);
+            }
+        }
+        let start = self.dots_start();
+        (0..PALETTE_COUNT)
+            .find(|&i| (x - (start + i as f64 * 16.0)).abs() <= 7.0)
+            .map(HdrBtn::Dot)
+    }
+
     pub fn text_viewport_height(&self) -> f64 {
-        (self.height as f64 - self.text_top() - self.status_height()).max(20.0)
+        (self.view_size().1 - self.text_top() - self.status_height()).max(20.0)
     }
 
     pub fn text_wrap_width(&self) -> i32 {
         if self.word_wrap {
-            ((self.width as f64 - PAD_X * 2.0 - 8.0).max(80.0)) as i32
+            ((self.view_size().0 - PAD_X * 2.0 - 8.0).max(80.0)) as i32
         } else {
             -1
         }
@@ -249,7 +357,10 @@ impl EditorWindow {
     }
 
     pub fn schedule_autosave(&mut self, delay_ms: u64) {
-        if matches!(self.mode, WindowMode::Sticky { .. } | WindowMode::Overlay { .. }) {
+        if matches!(
+            self.mode,
+            WindowMode::Sticky { .. } | WindowMode::Overlay { .. }
+        ) {
             self.autosave_due = Some(Instant::now() + std::time::Duration::from_millis(delay_ms));
         }
     }
@@ -257,7 +368,8 @@ impl EditorWindow {
     fn refresh_line_height(&mut self) {
         let c_font = CString::new(self.font_family.as_str())
             .unwrap_or_else(|_| CString::new("monospace").unwrap());
-        self.line_height = unsafe { kdx_measure_line_height(c_font.as_ptr(), self.font_size as f64) };
+        self.line_height =
+            unsafe { kdx_measure_line_height(c_font.as_ptr(), self.font_size as f64) };
     }
 
     pub fn zoom(&mut self, delta: f32) {
@@ -298,7 +410,9 @@ impl EditorWindow {
         }
         if len > 0 {
             let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len) };
-            let text = String::from_utf8_lossy(bytes).replace("\r\n", "\n").replace('\r', "\n");
+            let text = String::from_utf8_lossy(bytes)
+                .replace("\r\n", "\n")
+                .replace('\r', "\n");
             if self.find_open && self.find_focus == FindFocus::Find {
                 self.find_query.push_str(&text.replace('\n', " "));
                 self.refresh_find_matches(true);
@@ -329,10 +443,18 @@ impl EditorWindow {
             return;
         }
         if jump_to_next {
-            let from = self.buf.selection().map(|(s, _)| s).unwrap_or(self.buf.cursor());
+            let from = self
+                .buf
+                .selection()
+                .map(|(s, _)| s)
+                .unwrap_or(self.buf.cursor());
             if let Some(m) = search::find_next(&text, &self.find_query, from, self.case_sensitive) {
                 self.buf.select_range(m.start, m.end);
-                self.current_match = all.iter().position(|x| x.start == m.start).map(|i| i + 1).unwrap_or(1);
+                self.current_match = all
+                    .iter()
+                    .position(|x| x.start == m.start)
+                    .map(|i| i + 1)
+                    .unwrap_or(1);
                 self.ensure_cursor_visible();
             }
         }
@@ -350,15 +472,27 @@ impl EditorWindow {
             return;
         }
         let found = if forward {
-            let from = self.buf.selection().map(|(_, e)| e).unwrap_or(self.buf.cursor());
+            let from = self
+                .buf
+                .selection()
+                .map(|(_, e)| e)
+                .unwrap_or(self.buf.cursor());
             search::find_next(&text, &self.find_query, from, self.case_sensitive)
         } else {
-            let before = self.buf.selection().map(|(s, _)| s).unwrap_or(self.buf.cursor());
+            let before = self
+                .buf
+                .selection()
+                .map(|(s, _)| s)
+                .unwrap_or(self.buf.cursor());
             search::find_prev(&text, &self.find_query, before, self.case_sensitive)
         };
         if let Some(m) = found {
             self.buf.select_range(m.start, m.end);
-            self.current_match = all.iter().position(|x| x.start == m.start).map(|i| i + 1).unwrap_or(1);
+            self.current_match = all
+                .iter()
+                .position(|x| x.start == m.start)
+                .map(|i| i + 1)
+                .unwrap_or(1);
             self.ensure_cursor_visible();
             self.needs_redraw = true;
         }
@@ -391,8 +525,12 @@ impl EditorWindow {
             return;
         }
         let text = self.buf.to_string_lossy();
-        let (replaced, count) =
-            search::replace_all(&text, &self.find_query, &self.replace_query, self.case_sensitive);
+        let (replaced, count) = search::replace_all(
+            &text,
+            &self.find_query,
+            &self.replace_query,
+            self.case_sensitive,
+        );
         if count > 0 {
             self.buf.replace_all_text(&replaced);
             self.schedule_autosave(autosave_ms);
@@ -519,7 +657,11 @@ impl EditorWindow {
                     }
                     b'z' | b'Z' => {
                         if self.find_focus == FindFocus::None {
-                            let changed = if shift { self.buf.redo() } else { self.buf.undo() };
+                            let changed = if shift {
+                                self.buf.redo()
+                            } else {
+                                self.buf.undo()
+                            };
                             if changed {
                                 self.schedule_autosave(autosave_ms);
                                 self.update_title();
@@ -729,14 +871,27 @@ impl EditorWindow {
     }
 
     pub fn handle_pointer_motion(&mut self, app: *mut KdxApp, x: f64, y: f64) {
+        // The shim reports (-1e6, -1e6) when the pointer leaves the surface.
+        if x < -1000.0 {
+            if self.hover.take().is_some() {
+                self.needs_redraw = true;
+            }
+            return;
+        }
+        let (x, y) = (x - self.inset(), y - self.inset());
         self.hover_x = x;
         self.hover_y = y;
+        let hover = self.header_hit(x, y);
+        if hover != self.hover {
+            self.hover = hover;
+            self.needs_redraw = true;
+        }
 
         let cursor_kind = if y < self.header_height() {
             KDX_CURSOR_POINTER
         } else if y < self.text_top() {
             KDX_CURSOR_POINTER
-        } else if y < self.height as f64 - self.status_height() {
+        } else if y < self.view_size().1 - self.status_height() {
             KDX_CURSOR_TEXT
         } else {
             KDX_CURSOR_DEFAULT
@@ -761,11 +916,16 @@ impl EditorWindow {
         y: f64,
         autosave_ms: u64,
     ) -> ViewAction {
+        let (x, y) = (x - self.inset(), y - self.inset());
+        let (view_w, view_h) = self.view_size();
         if !pressed {
             if button == BTN_LEFT {
                 self.dragging_text = false;
             }
             return ViewAction::None;
+        }
+        if self.is_overlay() && (x < 0.0 || y < 0.0 || x >= view_w || y >= view_h) {
+            return ViewAction::None; // click on the shadow margin
         }
 
         // Middle-click: Wayland Primary Selection paste!
@@ -782,41 +942,26 @@ impl EditorWindow {
 
         // 1. Header bar clicks (Sticky & Overlay modes)
         if self.has_header() && y < HEADER_H {
-            let w = self.width as f64;
-            // Right-side buttons: [×] at [w-26..w-4], [A] at [w-50..w-28] (sticky only)
-            if x >= w - 28.0 {
-                return ViewAction::CloseOrHide;
-            }
-            if self.is_sticky() && x >= w - 54.0 && x < w - 28.0 {
-                if let WindowMode::Sticky { note_id } = &self.mode {
-                    return ViewAction::ArchiveSticky(note_id.clone());
-                }
-            }
-            // Left-side [+] button (sticky only): [6..26]
-            let dots_start = if self.is_sticky() {
-                if x >= 4.0 && x <= 28.0 {
-                    return ViewAction::NewSticky;
-                }
-                36.0
-            } else {
-                14.0
-            };
-            // 6 Palette swatch dots spaced 16px apart
-            for i in 0..PALETTE_COUNT {
-                let cx = dots_start + (i as f64) * 16.0;
-                if (x - cx).abs() <= 7.0 {
+            return match self.header_hit(x, y) {
+                Some(HdrBtn::Close) => ViewAction::CloseOrHide,
+                Some(HdrBtn::Archive) => match &self.mode {
+                    WindowMode::Sticky { note_id } => ViewAction::ArchiveSticky(note_id.clone()),
+                    _ => ViewAction::None,
+                },
+                Some(HdrBtn::New) => ViewAction::NewSticky,
+                Some(HdrBtn::Dot(i)) => {
                     self.palette_idx = i;
                     self.needs_redraw = true;
-                    return ViewAction::PaletteChanged(i);
+                    ViewAction::PaletteChanged(i)
                 }
-            }
-            return ViewAction::StartDrag;
+                None => ViewAction::StartDrag,
+            };
         }
 
         // 2. Find/Replace bar clicks
         if self.find_open && y >= self.header_height() && y < self.text_top() {
             let fy = y - self.header_height();
-            let w = self.width as f64;
+            let w = view_w;
             if fy < 32.0 {
                 if x >= w - 28.0 {
                     self.find_open = false;
@@ -842,7 +987,7 @@ impl EditorWindow {
         }
 
         // 3. Text editor click
-        if y >= self.text_top() && y < self.height as f64 - self.status_height() {
+        if y >= self.text_top() && y < view_h - self.status_height() {
             self.find_focus = FindFocus::None;
             let idx = self.hit_test_editor(x, y);
             let now = Instant::now();
@@ -850,12 +995,18 @@ impl EditorWindow {
                 .last_click_time
                 .map(|t| now.duration_since(t).as_millis() < 380)
                 .unwrap_or(false);
-            self.click_streak = if is_multi { (self.click_streak % 3) + 1 } else { 1 };
+            self.click_streak = if is_multi {
+                (self.click_streak % 3) + 1
+            } else {
+                1
+            };
             self.last_click_time = Some(now);
 
             let shift = (mods & KDX_MOD_SHIFT) != 0;
             if self.click_streak == 2 {
-                let ws = self.buf.prev_word_boundary(self.buf.next_char_boundary(idx));
+                let ws = self
+                    .buf
+                    .prev_word_boundary(self.buf.next_char_boundary(idx));
                 let we = self.buf.next_word_boundary(idx);
                 self.buf.select_range(ws, we);
                 self.sync_primary_selection(app);
@@ -933,7 +1084,11 @@ impl EditorWindow {
         self.view_slice_start = start_byte;
         self.view_slice_end = end_byte;
         let y_offset = (first_line as f64) * self.line_height;
-        (self.buf.slice_string(start_byte, end_byte), start_byte, y_offset)
+        (
+            self.buf.slice_string(start_byte, end_byte),
+            start_byte,
+            y_offset,
+        )
     }
 
     fn hit_test_editor(&mut self, x: f64, y: f64) -> usize {
@@ -998,178 +1153,50 @@ impl EditorWindow {
         if !ok {
             return;
         }
+        self.draw(canvas.cr, canvas.width as f64, canvas.height as f64);
+        unsafe { kdx_win_end_paint(self.handle, &mut canvas) };
+        self.needs_redraw = false;
+        self.follow_caret = false;
+    }
 
-        let cr = canvas.cr;
-        let w = canvas.width as f64;
-        let h = canvas.height as f64;
+    /// Draws the whole window onto `cr` (a `w` x `h` logical-px canvas). Shared by the real
+    /// `wl_shm` path and the offscreen snapshot tests.
+    pub(crate) fn draw(&mut self, cr: *mut std::ffi::c_void, full_w: f64, full_h: f64) {
         let pal = self.palette();
         let alpha = if self.is_sticky() || self.is_overlay() {
             self.opacity as f64
         } else {
             1.0
         };
+        let ui = Ui::new(cr);
 
-        // Background
+        // Overlay: drop shadow in the margin, then everything below is clipped to the panel.
+        let inset = self.inset();
+        let (w, h) = (full_w - inset * 2.0, full_h - inset * 2.0);
+        if self.is_overlay() {
+            unsafe { kdx_translate(cr, inset, inset) };
+            draw_panel_shadow(cr, w, h, self.dark);
+            unsafe {
+                kdx_save(cr);
+                kdx_clip_round_rect(cr, 0.0, 0.0, w, h, RADIUS_PANEL);
+            }
+        }
+
+        // Background (Kavox `panel` step)
         unsafe { kdx_draw_rect(cr, 0.0, 0.0, w, h, pal.bg, alpha) };
 
-        let c_ui_font = CString::new("sans-serif").unwrap();
         let c_mono_font = CString::new(self.font_family.as_str())
             .unwrap_or_else(|_| CString::new("monospace").unwrap());
 
         // 1. Header bar (Sticky & Overlay)
         if self.has_header() {
-            unsafe {
-                kdx_draw_rect(cr, 0.0, 0.0, w, HEADER_H, pal.header, alpha);
-                kdx_draw_line(cr, 0.0, HEADER_H - 0.5, w, HEADER_H - 0.5, 1.0, pal.border, 1.0);
-            }
-            let dots_start = if self.is_sticky() {
-                // "+" button
-                let plus = "+";
-                let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 11.5, plus.as_ptr() as *const c_char, plus.len(), -1)
-                };
-                unsafe {
-                    kdx_layout_draw(cr, pl, 11.0, 4.0, pal.fg, 0.9);
-                    kdx_layout_free(pl);
-                }
-                36.0
-            } else {
-                14.0
-            };
-
-            // 6 Palette dots
-            for i in 0..PALETTE_COUNT {
-                let dot_pal = palette(i, self.dark);
-                let cx = dots_start + (i as f64) * 16.0;
-                let cy = HEADER_H * 0.5;
-                if i == self.palette_idx {
-                    unsafe { kdx_draw_circle(cr, cx, cy, 5.5, pal.fg, 0.85) };
-                }
-                unsafe { kdx_draw_circle(cr, cx, cy, 4.0, dot_pal.accent, 1.0) };
-            }
-
-            if self.is_overlay() {
-                let label = "Kadex Scratchpad  ·  Esc to hide";
-                let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, label.as_ptr() as *const c_char, label.len(), -1)
-                };
-                unsafe {
-                    kdx_layout_draw(cr, pl, dots_start + (PALETTE_COUNT as f64) * 16.0 + 6.0, 7.0, pal.muted, 0.95);
-                    kdx_layout_free(pl);
-                }
-            }
-
-            // Right buttons: [A] archive (sticky) + [×] hide
-            if self.is_sticky() {
-                let arch = "A";
-                let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, arch.as_ptr() as *const c_char, arch.len(), -1)
-                };
-                unsafe {
-                    kdx_layout_draw(cr, pl, w - 45.0, 6.5, pal.muted, 0.95);
-                    kdx_layout_free(pl);
-                }
-            }
-            let close_txt = "×";
-            let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 11.5, close_txt.as_ptr() as *const c_char, close_txt.len(), -1)
-            };
-            unsafe {
-                kdx_layout_draw(cr, pl, w - 21.0, 4.0, pal.muted, 0.95);
-                kdx_layout_free(pl);
-            }
+            let title = self.header_title();
+            self.draw_header(&ui, &pal, w, alpha, &title);
         }
 
         // 2. Find & Replace bar
         if self.find_open {
-            let fy = self.header_height();
-            let fh = self.find_bar_height();
-            unsafe {
-                kdx_draw_rect(cr, 0.0, fy, w, fh, pal.header, 1.0);
-                kdx_draw_line(cr, 0.0, fy + fh - 0.5, w, fy + fh - 0.5, 1.0, pal.border, 1.0);
-            }
-            // Find input box
-            let box_w = (w - 130.0).max(80.0);
-            let border_col = if self.find_focus == FindFocus::Find { pal.accent } else { pal.border };
-            unsafe {
-                kdx_draw_round_rect(cr, 8.0, fy + 4.0, box_w, 24.0, 4.0, border_col, 1.0);
-                kdx_draw_round_rect(cr, 9.0, fy + 5.0, box_w - 2.0, 22.0, 3.0, pal.bg, 1.0);
-            }
-            let disp = if self.find_query.is_empty() { "Find..." } else { &self.find_query };
-            let col = if self.find_query.is_empty() { pal.muted } else { pal.fg };
-            let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, disp.as_ptr() as *const c_char, disp.len(), -1)
-            };
-            unsafe {
-                kdx_layout_draw(cr, pl, 14.0, fy + 8.5, col, 1.0);
-                kdx_layout_free(pl);
-            }
-
-            // Match count + Aa + ×
-            let count_str = format!("{}/{}", self.current_match, self.match_count);
-            let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, count_str.as_ptr() as *const c_char, count_str.len(), -1)
-            };
-            unsafe {
-                kdx_layout_draw(cr, pl, w - 114.0, fy + 9.0, pal.muted, 1.0);
-                kdx_layout_free(pl);
-            }
-
-            let aa_col = if self.case_sensitive { pal.accent } else { pal.muted };
-            let aa = "Aa";
-            let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.5, aa.as_ptr() as *const c_char, aa.len(), -1)
-            };
-            unsafe {
-                kdx_layout_draw(cr, pl, w - 52.0, fy + 9.0, aa_col, 1.0);
-                kdx_layout_free(pl);
-            }
-
-            let close = "×";
-            let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 11.0, close.as_ptr() as *const c_char, close.len(), -1)
-            };
-            unsafe {
-                kdx_layout_draw(cr, pl, w - 20.0, fy + 5.5, pal.muted, 1.0);
-                kdx_layout_free(pl);
-            }
-
-            if self.replace_open {
-                let ry = fy + 32.0;
-                let rbox_w = (w - 150.0).max(80.0);
-                let rborder = if self.find_focus == FindFocus::Replace { pal.accent } else { pal.border };
-                unsafe {
-                    kdx_draw_round_rect(cr, 8.0, ry + 3.0, rbox_w, 24.0, 4.0, rborder, 1.0);
-                    kdx_draw_round_rect(cr, 9.0, ry + 4.0, rbox_w - 2.0, 22.0, 3.0, pal.bg, 1.0);
-                }
-                let rdisp = if self.replace_query.is_empty() { "Replace..." } else { &self.replace_query };
-                let rcol = if self.replace_query.is_empty() { pal.muted } else { pal.fg };
-                let pl = unsafe {
-                    kdx_layout_new(cr, c_ui_font.as_ptr(), 9.0, rdisp.as_ptr() as *const c_char, rdisp.len(), -1)
-                };
-                unsafe {
-                    kdx_layout_draw(cr, pl, 14.0, ry + 7.5, rcol, 1.0);
-                    kdx_layout_free(pl);
-                }
-
-                // Replace / All buttons
-                unsafe {
-                    kdx_draw_round_rect(cr, w - 134.0, ry + 4.0, 56.0, 22.0, 4.0, pal.border, 1.0);
-                    kdx_draw_round_rect(cr, w - 72.0, ry + 4.0, 62.0, 22.0, 4.0, pal.accent, 0.85);
-                }
-                let b1 = "Replace";
-                let pl1 = unsafe { kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, b1.as_ptr() as *const c_char, b1.len(), -1) };
-                unsafe {
-                    kdx_layout_draw(cr, pl1, w - 127.0, ry + 8.5, pal.fg, 1.0);
-                    kdx_layout_free(pl1);
-                }
-                let b2 = "All";
-                let pl2 = unsafe { kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, b2.as_ptr() as *const c_char, b2.len(), -1) };
-                unsafe {
-                    kdx_layout_draw(cr, pl2, w - 50.0, ry + 8.5, pal.bg, 1.0);
-                    kdx_layout_free(pl2);
-                }
-            }
+            self.draw_find_bar(&ui, &pal, w);
         }
 
         // 3. Text Editor Area
@@ -1224,14 +1251,23 @@ impl EditorWindow {
         let origin_x = PAD_X;
         let origin_y = top + PAD_Y - self.scroll_y + y_offset;
 
-        // Selection highlight
+        // Selection highlight: Kavox `lit` at alpha 56 (dark) / 40 (light)
         if let Some((sel_s, sel_e)) = self.buf.selection() {
             let slice_end = slice_start + text_slice.len();
             if sel_e > slice_start && sel_s < slice_end {
                 let rs = sel_s.saturating_sub(slice_start) as i32;
                 let re = (sel_e.min(slice_end) - slice_start) as i32;
                 unsafe {
-                    kdx_layout_draw_selection(cr, layout, origin_x, origin_y, rs, re, pal.selection, 0.9);
+                    kdx_layout_draw_selection(
+                        cr,
+                        layout,
+                        origin_x,
+                        origin_y,
+                        rs,
+                        re,
+                        pal.lit,
+                        pal.selection_alpha as f64 / 255.0,
+                    );
                 }
             }
         }
@@ -1240,17 +1276,24 @@ impl EditorWindow {
         if self.buf.is_empty() {
             let ph = "Type a note...";
             let pl = unsafe {
-                kdx_layout_new(cr, c_mono_font.as_ptr(), self.font_size as f64, ph.as_ptr() as *const c_char, ph.len(), -1)
+                kdx_layout_new(
+                    cr,
+                    c_mono_font.as_ptr(),
+                    self.font_size as f64,
+                    ph.as_ptr() as *const c_char,
+                    ph.len(),
+                    -1,
+                )
             };
             unsafe {
-                kdx_layout_draw(cr, pl, origin_x, origin_y, pal.muted, 0.45);
+                kdx_layout_draw(cr, pl, origin_x, origin_y, pal.muted, 0.65);
                 kdx_layout_free(pl);
             }
         } else {
             unsafe { kdx_layout_draw(cr, layout, origin_x, origin_y, pal.fg, 1.0) };
         }
 
-        // Caret
+        // Caret: Kavox red in every palette
         if self.focused && self.caret_visible && self.find_focus == FindFocus::None {
             let cur = self.buf.cursor();
             let slice_end = slice_start + text_slice.len();
@@ -1262,13 +1305,14 @@ impl EditorWindow {
                 unsafe { kdx_layout_index_to_pos(layout, rel, &mut cx, &mut cy, &mut ch) };
                 let caret_h = if ch > 4.0 { ch } else { self.line_height };
                 unsafe {
-                    kdx_draw_rect(
+                    kdx_draw_round_rect(
                         cr,
                         origin_x + cx,
                         origin_y + cy + 1.0,
                         1.75,
                         caret_h - 2.0,
-                        pal.accent,
+                        0.875,
+                        pal.caret(),
                         1.0,
                     );
                 }
@@ -1291,45 +1335,275 @@ impl EditorWindow {
         unsafe { kdx_restore(cr) };
 
         // 4. Status bar (File Mode)
-        if let WindowMode::File { encoding, line_ending, .. } = &self.mode {
-            let sy = h - STATUS_H;
+        if self.has_status_bar() {
+            self.draw_status_bar(&ui, &pal, w, h);
+        }
+
+        // Outer border: 1 px `line` (Kavox panel/card outline)
+        if self.is_overlay() {
             unsafe {
-                kdx_draw_rect(cr, 0.0, sy, w, STATUS_H, pal.header, 1.0);
-                kdx_draw_line(cr, 0.0, sy + 0.5, w, sy + 0.5, 1.0, pal.border, 1.0);
+                kdx_restore(cr); // drop the panel clip
+                kdx_stroke_round_rect(
+                    cr,
+                    0.5,
+                    0.5,
+                    w - 1.0,
+                    h - 1.0,
+                    RADIUS_PANEL - 0.5,
+                    1.0,
+                    pal.border,
+                    1.0,
+                );
             }
-            let (ln, col) = self.cursor_line_col();
-            let zoom_pct = ((self.font_size / self.default_font_size) * 100.0).round() as i32;
-            let wrap_s = if self.word_wrap { "Wrap" } else { "NoWrap" };
-            let mod_s = if self.buf.is_dirty() { " · Modified" } else { "" };
-            let status = format!(
-                "Ln {ln}, Col {col}   |   {}   {}   |   {wrap_s}   {zoom_pct}%{mod_s}",
-                encoding.label(),
-                line_ending.label()
+        } else if self.is_sticky() {
+            unsafe {
+                kdx_stroke_round_rect(cr, 0.5, 0.5, w - 1.0, h - 1.0, 0.0, 1.0, pal.border, 1.0);
+            }
+        }
+    }
+
+    /// First line of the note for the sticky header (empty for an empty note).
+    fn header_title(&mut self) -> String {
+        if !self.is_sticky() {
+            return String::new();
+        }
+        let version = self.buf.version();
+        if let Some((v, t)) = &self.title_cache {
+            if *v == version {
+                return t.clone();
+            }
+        }
+        let first = self.buf.first_non_empty_line();
+        let title = if first == "(empty note)" {
+            String::new()
+        } else {
+            first
+        };
+        self.title_cache = Some((version, title.clone()));
+        title
+    }
+
+    fn draw_header(&self, ui: &Ui, pal: &Palette, w: f64, alpha: f64, title: &str) {
+        let cr = ui.cr;
+        let cy = HEADER_H * 0.5;
+        let pad = self.header_pad();
+        unsafe {
+            kdx_draw_rect(cr, 0.0, 0.0, w, HEADER_H, pal.header, alpha);
+            kdx_draw_rect(cr, 0.0, HEADER_H - 1.0, w, 1.0, pal.border, 1.0);
+        }
+
+        // Icon button: hover = `hover` fill, danger hover = red tint + red text.
+        let button = |cx: f64, icon: Icon, which: HdrBtn| {
+            let hovered = self.hover == Some(which);
+            let danger = which == HdrBtn::Close;
+            let mut color = pal.muted;
+            if hovered {
+                unsafe {
+                    if danger {
+                        kdx_draw_round_rect(
+                            cr,
+                            cx - BTN / 2.0,
+                            cy - BTN / 2.0,
+                            BTN,
+                            BTN,
+                            BTN_RADIUS,
+                            RED,
+                            DANGER_TINT,
+                        );
+                    } else {
+                        kdx_draw_round_rect(
+                            cr,
+                            cx - BTN / 2.0,
+                            cy - BTN / 2.0,
+                            BTN,
+                            BTN,
+                            BTN_RADIUS,
+                            pal.hover,
+                            1.0,
+                        );
+                    }
+                }
+                color = if danger { pal.red_text } else { pal.fg };
+            }
+            ui.icon(icon, cx, cy, ICON_PX, color, 1.0);
+        };
+
+        if self.is_sticky() {
+            button(16.0, Icon::Plus, HdrBtn::New);
+            button(w - 40.0 - pad, Icon::Archive, HdrBtn::Archive);
+        }
+        button(w - 14.0 - pad, Icon::Close, HdrBtn::Close);
+
+        // Palette dots: accent fill with a 1 px `line_strong` ring; the active one gets a `text` halo.
+        let start = self.dots_start();
+        for i in 0..PALETTE_COUNT {
+            let dot = palette(i, self.dark);
+            let cx = start + i as f64 * 16.0;
+            unsafe {
+                kdx_draw_circle(cr, cx, cy, 4.5, dot.accent, 1.0);
+                kdx_stroke_circle(cr, cx, cy, 4.5, 1.0, pal.border_strong, 1.0);
+                if i == self.palette_idx {
+                    kdx_stroke_circle(cr, cx, cy, 7.0, 1.5, pal.fg, 1.0);
+                } else if self.hover == Some(HdrBtn::Dot(i)) {
+                    kdx_stroke_circle(cr, cx, cy, 7.0, 1.0, pal.muted, 1.0);
+                }
+            }
+        }
+
+        if self.is_sticky() && !title.is_empty() {
+            // Between the dots and the archive button, ellipsised, in `muted`.
+            let x = start + (PALETTE_COUNT as f64) * 16.0 + 4.0;
+            let room = w - 52.0 - 6.0 - x;
+            if room > 40.0 {
+                let text = ui.ellipsize(title, UI_PT, room);
+                ui.text(&text, UI_PT, x, cy, pal.muted, 1.0);
+            }
+        }
+
+        if self.is_overlay() {
+            let x = start + (PALETTE_COUNT as f64) * 16.0 + 4.0;
+            let a = ui.text("Kadex Scratchpad", UI_PT, x, cy, pal.muted, 1.0);
+            unsafe { kdx_draw_circle(cr, x + a + 9.0, cy, 1.2, pal.faint, 1.0) };
+            ui.text("Esc to hide", UI_PT, x + a + 18.0, cy, pal.muted, 1.0);
+        }
+    }
+
+    fn draw_find_bar(&self, ui: &Ui, pal: &Palette, w: f64) {
+        let cr = ui.cr;
+        let fy = self.header_height();
+        let fh = self.find_bar_height();
+        unsafe {
+            kdx_draw_rect(cr, 0.0, fy, w, fh, pal.header, 1.0);
+            kdx_draw_rect(cr, 0.0, fy + fh - 1.0, w, 1.0, pal.border, 1.0);
+        }
+        // Inputs: recessed `field` with a 1 px `line` outline, `text` outline when focused.
+        let input = |x: f64, y: f64, bw: f64, focused: bool| unsafe {
+            kdx_draw_round_rect(
+                cr,
+                x,
+                y,
+                bw,
+                24.0,
+                7.0,
+                if focused { pal.fg } else { pal.border },
+                1.0,
             );
-            let pl = unsafe {
-                kdx_layout_new(cr, c_ui_font.as_ptr(), 8.0, status.as_ptr() as *const c_char, status.len(), -1)
+            kdx_draw_round_rect(cr, x + 1.0, y + 1.0, bw - 2.0, 22.0, 6.0, pal.field, 1.0);
+        };
+
+        let box_w = (w - 130.0).max(80.0);
+        input(8.0, fy + 4.0, box_w, self.find_focus == FindFocus::Find);
+        let (disp, col) = if self.find_query.is_empty() {
+            ("Find...", pal.faint)
+        } else {
+            (self.find_query.as_str(), pal.fg)
+        };
+        ui.text(disp, UI_PT, 14.0, fy + 16.0, col, 1.0);
+
+        // Match count, Aa toggle (active = `lit` pill), close
+        let count_str = format!("{}/{}", self.current_match, self.match_count);
+        ui.text(&count_str, UI_PT, w - 114.0, fy + 16.0, pal.muted, 1.0);
+        if self.case_sensitive {
+            unsafe { kdx_draw_round_rect(cr, w - 57.0, fy + 5.0, 26.0, 22.0, 7.0, pal.lit, 1.0) };
+        }
+        ui.text(
+            "Aa",
+            UI_PT,
+            w - 52.0,
+            fy + 16.0,
+            if self.case_sensitive {
+                pal.on_lit
+            } else {
+                pal.muted
+            },
+            1.0,
+        );
+        ui.icon(Icon::Close, w - 14.0, fy + 16.0, 14.0, pal.muted, 1.0);
+
+        if self.replace_open {
+            let ry = fy + 32.0;
+            let rbox_w = (w - 150.0).max(80.0);
+            input(8.0, ry + 3.0, rbox_w, self.find_focus == FindFocus::Replace);
+            let (rdisp, rcol) = if self.replace_query.is_empty() {
+                ("Replace...", pal.faint)
+            } else {
+                (self.replace_query.as_str(), pal.fg)
             };
+            ui.text(rdisp, UI_PT, 14.0, ry + 15.0, rcol, 1.0);
+
+            // Replace (secondary, `hover` fill) / All (primary, `lit` fill)
             unsafe {
-                kdx_layout_draw(cr, pl, 10.0, sy + 4.0, pal.muted, 1.0);
-                kdx_layout_free(pl);
+                kdx_draw_round_rect(cr, w - 134.0, ry + 4.0, 56.0, 22.0, 7.0, pal.hover, 1.0);
+                kdx_draw_round_rect(cr, w - 72.0, ry + 4.0, 62.0, 22.0, 7.0, pal.lit, 1.0);
             }
+            let (rw, _) = ui.size("Replace", UI_PT);
+            ui.text(
+                "Replace",
+                UI_PT,
+                w - 134.0 + (56.0 - rw) / 2.0,
+                ry + 15.5,
+                pal.fg,
+                1.0,
+            );
+            let (aw, _) = ui.size("All", UI_PT);
+            ui.text(
+                "All",
+                UI_PT,
+                w - 72.0 + (62.0 - aw) / 2.0,
+                ry + 15.5,
+                pal.on_lit,
+                1.0,
+            );
+        }
+    }
+
+    fn draw_status_bar(&self, ui: &Ui, pal: &Palette, w: f64, h: f64) {
+        let WindowMode::File {
+            encoding,
+            line_ending,
+            ..
+        } = &self.mode
+        else {
+            return;
+        };
+        let cr = ui.cr;
+        let sy = h - STATUS_H;
+        unsafe {
+            kdx_draw_rect(cr, 0.0, sy, w, STATUS_H, pal.header, 1.0);
+            kdx_draw_rect(cr, 0.0, sy, w, 1.0, pal.border, 1.0);
+        }
+        let cy = sy + 1.0 + (STATUS_H - 1.0) * 0.5;
+        let (ln, col) = self.cursor_line_col();
+        let zoom_pct = ((self.font_size / self.default_font_size) * 100.0).round() as i32;
+        const GAP: f64 = 9.0; // text edge to separator dot centre
+
+        // Left: position, then the modified marker.
+        let pos = format!("Ln {ln}, Col {col}");
+        let mut x = 12.0;
+        x += ui.text(&pos, STATUS_PT, x, cy, pal.muted, 1.0);
+        if self.buf.is_dirty() {
+            unsafe { kdx_draw_circle(cr, x + GAP, cy, 1.2, pal.faint, 1.0) };
+            ui.text("Modified", STATUS_PT, x + GAP * 2.0, cy, pal.fg, 1.0);
         }
 
-        // Subtle outer border for Overlay & Sticky notes
-        if self.is_overlay() || self.is_sticky() {
-            let bcol = if self.is_overlay() { pal.accent } else { pal.border };
-            let balpha = if self.is_overlay() { 0.85 } else { 0.9 };
-            unsafe {
-                kdx_draw_line(cr, 0.5, 0.5, w - 0.5, 0.5, 1.0, bcol, balpha);
-                kdx_draw_line(cr, 0.5, h - 0.5, w - 0.5, h - 0.5, 1.0, bcol, balpha);
-                kdx_draw_line(cr, 0.5, 0.5, 0.5, h - 0.5, 1.0, bcol, balpha);
-                kdx_draw_line(cr, w - 0.5, 0.5, w - 0.5, h - 0.5, 1.0, bcol, balpha);
+        // Right: encoding, EOL, wrap, zoom (right-aligned, faint middle dots between them).
+        let zoom = format!("{zoom_pct}%");
+        let items = [
+            encoding.label(),
+            line_ending.label(),
+            if self.word_wrap { "Wrap" } else { "NoWrap" },
+            zoom.as_str(),
+        ];
+        let mut rx = w - 12.0;
+        for (i, item) in items.iter().enumerate().rev() {
+            let (iw, _) = ui.size(item, STATUS_PT);
+            ui.text(item, STATUS_PT, rx - iw, cy, pal.muted, 1.0);
+            rx -= iw;
+            if i > 0 {
+                unsafe { kdx_draw_circle(cr, rx - GAP, cy, 1.2, pal.faint, 1.0) };
+                rx -= GAP * 2.0;
             }
         }
-
-        unsafe { kdx_win_end_paint(self.handle, &mut canvas) };
-        self.needs_redraw = false;
-        self.follow_caret = false;
     }
 
     fn cursor_line_col(&self) -> (usize, usize) {
@@ -1347,6 +1621,135 @@ impl EditorWindow {
                 last_nl = i + 1;
             }
         }
-        (line, self.buf.slice_string(last_nl, cur).chars().count() + 1)
+        (
+            line,
+            self.buf.slice_string(last_nl, cur).chars().count() + 1,
+        )
+    }
+}
+
+/// UI chrome helpers: Archivo Medium text and lucide-style stroked icons.
+struct Ui {
+    cr: *mut std::ffi::c_void,
+    family: CString,
+}
+
+impl Ui {
+    fn new(cr: *mut std::ffi::c_void) -> Self {
+        Self {
+            cr,
+            family: CString::new(UI_FAMILY).unwrap_or_default(),
+        }
+    }
+
+    fn layout(&self, text: &str, pt: f64) -> *mut KdxLayout {
+        unsafe {
+            let l = kdx_layout_new(
+                self.cr,
+                self.family.as_ptr(),
+                pt,
+                text.as_ptr() as *const c_char,
+                text.len(),
+                -1,
+            );
+            kdx_layout_set_subpixel(l);
+            l
+        }
+    }
+
+    fn size(&self, text: &str, pt: f64) -> (f64, f64) {
+        let l = self.layout(text, pt);
+        let (mut w, mut h) = (0.0, 0.0);
+        unsafe {
+            kdx_layout_get_size(l, &mut w, &mut h);
+            kdx_layout_free(l);
+        }
+        (w, h)
+    }
+
+    /// Shortens `text` with a trailing "…" so it fits `max_w` px.
+    fn ellipsize(&self, text: &str, pt: f64, max_w: f64) -> String {
+        if self.size(text, pt).0 <= max_w {
+            return text.to_string();
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let (mut lo, mut hi) = (0usize, chars.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            let cand: String = chars[..mid].iter().collect::<String>() + "\u{2026}";
+            if self.size(&cand, pt).0 <= max_w {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        chars[..lo]
+            .iter()
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+            + "\u{2026}"
+    }
+
+    /// Draws `text` with its line box vertically centred on `cy`; returns the advance width.
+    fn text(&self, text: &str, pt: f64, x: f64, cy: f64, rgb: u32, alpha: f64) -> f64 {
+        let l = self.layout(text, pt);
+        let (mut w, mut h) = (0.0, 0.0);
+        unsafe {
+            kdx_layout_get_size(l, &mut w, &mut h);
+            kdx_layout_draw(self.cr, l, x, (cy - h / 2.0).round(), rgb, alpha);
+            kdx_layout_free(l);
+        }
+        w
+    }
+
+    /// Strokes `icon` (24-unit grid, stroke 2 units, round caps/joins) centred on `(cx, cy)`.
+    fn icon(&self, icon: Icon, cx: f64, cy: f64, px: f64, rgb: u32, alpha: f64) {
+        let cr = self.cr;
+        let k = px / GRID as f64;
+        unsafe {
+            kdx_save(cr);
+            kdx_translate(cr, cx - px / 2.0, cy - px / 2.0);
+            kdx_scale(cr, k, k);
+            kdx_path_begin(cr);
+            for seg in icon.segments() {
+                match *seg {
+                    Seg::M(x, y) => kdx_path_move(cr, x as f64, y as f64),
+                    Seg::L(x, y) => kdx_path_line(cr, x as f64, y as f64),
+                    Seg::C(a, b, c, d, e, f) => kdx_path_curve(
+                        cr, a as f64, b as f64, c as f64, d as f64, e as f64, f as f64,
+                    ),
+                    Seg::Z => kdx_path_close(cr),
+                }
+            }
+            kdx_path_stroke(cr, STROKE as f64, rgb, alpha);
+            kdx_restore(cr);
+        }
+    }
+}
+
+/// Soft drop shadow of the overlay panel: stacked rounded rects approximate a blur (Kavox popover
+/// shadow: black, 12 px down, wide blur; lighter on light themes).
+fn draw_panel_shadow(cr: *mut std::ffi::c_void, w: f64, h: f64, dark: bool) {
+    const LAYERS: i32 = 14;
+    const BLUR: f64 = 28.0;
+    const OFFSET_Y: f64 = 8.0;
+    let peak = if dark { 0.5 } else { 0.2 };
+    for i in 0..LAYERS {
+        let t = (i as f64 + 0.5) / LAYERS as f64; // 0..1 from the outside in
+        let grow = BLUR / 2.0 - t * BLUR;
+        let a = peak / LAYERS as f64 * 1.9;
+        unsafe {
+            kdx_draw_round_rect(
+                cr,
+                -grow,
+                -grow + OFFSET_Y,
+                w + grow * 2.0,
+                h + grow * 2.0,
+                RADIUS_PANEL + grow,
+                0x000000,
+                a,
+            );
+        }
     }
 }

@@ -60,7 +60,8 @@ pub struct KdxCallbacks {
     pub on_key: Option<extern "C" fn(*mut c_void, u64, u32, u32, *const c_char, usize, bool)>,
     pub on_ime_commit: Option<extern "C" fn(*mut c_void, u64, *const c_char, usize)>,
     pub on_pointer_motion: Option<extern "C" fn(*mut c_void, u64, c_double, c_double)>,
-    pub on_pointer_button: Option<extern "C" fn(*mut c_void, u64, u32, bool, u32, c_double, c_double)>,
+    pub on_pointer_button:
+        Option<extern "C" fn(*mut c_void, u64, u32, bool, u32, c_double, c_double)>,
     pub on_pointer_scroll: Option<extern "C" fn(*mut c_void, u64, c_double, c_double, u32)>,
     pub on_repeat_info: Option<extern "C" fn(*mut c_void, i32, i32)>,
 }
@@ -105,14 +106,91 @@ extern "C" {
     pub fn kdx_win_begin_paint(win: *mut KdxWin, out_canvas: *mut KdxCanvas) -> bool;
     pub fn kdx_win_end_paint(win: *mut KdxWin, canvas: *mut KdxCanvas);
 
-    pub fn kdx_draw_rect(cr: *mut c_void, x: c_double, y: c_double, w: c_double, h: c_double, rgb: u32, alpha: c_double);
-    pub fn kdx_draw_round_rect(cr: *mut c_void, x: c_double, y: c_double, w: c_double, h: c_double, r: c_double, rgb: u32, alpha: c_double);
-    pub fn kdx_draw_circle(cr: *mut c_void, cx: c_double, cy: c_double, r: c_double, rgb: u32, alpha: c_double);
-    pub fn kdx_draw_line(cr: *mut c_void, x1: c_double, y1: c_double, x2: c_double, y2: c_double, lw: c_double, rgb: u32, alpha: c_double);
+    pub fn kdx_draw_rect(
+        cr: *mut c_void,
+        x: c_double,
+        y: c_double,
+        w: c_double,
+        h: c_double,
+        rgb: u32,
+        alpha: c_double,
+    );
+    pub fn kdx_draw_round_rect(
+        cr: *mut c_void,
+        x: c_double,
+        y: c_double,
+        w: c_double,
+        h: c_double,
+        r: c_double,
+        rgb: u32,
+        alpha: c_double,
+    );
+    pub fn kdx_draw_circle(
+        cr: *mut c_void,
+        cx: c_double,
+        cy: c_double,
+        r: c_double,
+        rgb: u32,
+        alpha: c_double,
+    );
+    pub fn kdx_draw_line(
+        cr: *mut c_void,
+        x1: c_double,
+        y1: c_double,
+        x2: c_double,
+        y2: c_double,
+        lw: c_double,
+        rgb: u32,
+        alpha: c_double,
+    );
     pub fn kdx_clip_rect(cr: *mut c_void, x: c_double, y: c_double, w: c_double, h: c_double);
     pub fn kdx_save(cr: *mut c_void);
     pub fn kdx_restore(cr: *mut c_void);
     pub fn kdx_translate(cr: *mut c_void, tx: c_double, ty: c_double);
+    pub fn kdx_scale(cr: *mut c_void, sx: c_double, sy: c_double);
+    pub fn kdx_stroke_round_rect(
+        cr: *mut c_void,
+        x: c_double,
+        y: c_double,
+        w: c_double,
+        h: c_double,
+        r: c_double,
+        lw: c_double,
+        rgb: u32,
+        alpha: c_double,
+    );
+    pub fn kdx_clip_round_rect(
+        cr: *mut c_void,
+        x: c_double,
+        y: c_double,
+        w: c_double,
+        h: c_double,
+        r: c_double,
+    );
+    pub fn kdx_stroke_circle(
+        cr: *mut c_void,
+        cx: c_double,
+        cy: c_double,
+        r: c_double,
+        lw: c_double,
+        rgb: u32,
+        alpha: c_double,
+    );
+    pub fn kdx_path_begin(cr: *mut c_void);
+    pub fn kdx_path_move(cr: *mut c_void, x: c_double, y: c_double);
+    pub fn kdx_path_line(cr: *mut c_void, x: c_double, y: c_double);
+    pub fn kdx_path_curve(
+        cr: *mut c_void,
+        x1: c_double,
+        y1: c_double,
+        x2: c_double,
+        y2: c_double,
+        x3: c_double,
+        y3: c_double,
+    );
+    pub fn kdx_path_close(cr: *mut c_void);
+    pub fn kdx_path_stroke(cr: *mut c_void, lw: c_double, rgb: u32, alpha: c_double);
+    pub fn kdx_font_register(path: *const c_char) -> bool;
 
     pub fn kdx_layout_new(
         cr: *mut c_void,
@@ -123,12 +201,43 @@ extern "C" {
         wrap_width_px: i32,
     ) -> *mut KdxLayout;
     pub fn kdx_layout_free(layout: *mut KdxLayout);
+    pub fn kdx_layout_set_subpixel(layout: *mut KdxLayout);
     pub fn kdx_layout_get_size(layout: *mut KdxLayout, out_w: *mut c_double, out_h: *mut c_double);
-    pub fn kdx_layout_draw(cr: *mut c_void, layout: *mut KdxLayout, x: c_double, y: c_double, rgb: u32, alpha: c_double);
-    pub fn kdx_layout_index_to_pos(layout: *mut KdxLayout, byte_idx: c_int, out_x: *mut c_double, out_y: *mut c_double, out_h: *mut c_double);
+    pub fn kdx_layout_draw(
+        cr: *mut c_void,
+        layout: *mut KdxLayout,
+        x: c_double,
+        y: c_double,
+        rgb: u32,
+        alpha: c_double,
+    );
+    pub fn kdx_layout_index_to_pos(
+        layout: *mut KdxLayout,
+        byte_idx: c_int,
+        out_x: *mut c_double,
+        out_y: *mut c_double,
+        out_h: *mut c_double,
+    );
     pub fn kdx_layout_xy_to_index(layout: *mut KdxLayout, x: c_double, y: c_double) -> c_int;
-    pub fn kdx_layout_draw_selection(cr: *mut c_void, layout: *mut KdxLayout, ox: c_double, oy: c_double, start_byte: c_int, end_byte: c_int, rgb: u32, alpha: c_double);
-    pub fn kdx_hit_test(font_family: *const c_char, font_size_pt: c_double, text: *const c_char, text_len: usize, wrap_width_px: i32, x: c_double, y: c_double) -> c_int;
+    pub fn kdx_layout_draw_selection(
+        cr: *mut c_void,
+        layout: *mut KdxLayout,
+        ox: c_double,
+        oy: c_double,
+        start_byte: c_int,
+        end_byte: c_int,
+        rgb: u32,
+        alpha: c_double,
+    );
+    pub fn kdx_hit_test(
+        font_family: *const c_char,
+        font_size_pt: c_double,
+        text: *const c_char,
+        text_len: usize,
+        wrap_width_px: i32,
+        x: c_double,
+        y: c_double,
+    ) -> c_int;
     pub fn kdx_measure_line_height(font_family: *const c_char, font_size_pt: c_double) -> c_double;
 }
 
@@ -165,7 +274,12 @@ pub struct ITimerSpec {
 extern "C" {
     pub fn poll(fds: *mut PollFd, nfds: u64, timeout: c_int) -> c_int;
     pub fn timerfd_create(clockid: c_int, flags: c_int) -> c_int;
-    pub fn timerfd_settime(fd: c_int, flags: c_int, new_value: *const ITimerSpec, old_value: *mut ITimerSpec) -> c_int;
+    pub fn timerfd_settime(
+        fd: c_int,
+        flags: c_int,
+        new_value: *const ITimerSpec,
+        old_value: *mut ITimerSpec,
+    ) -> c_int;
     pub fn read(fd: c_int, buf: *mut c_void, count: usize) -> isize;
     pub fn close(fd: c_int) -> c_int;
     pub fn signal(sig: c_int, handler: extern "C" fn(c_int)) -> usize;
