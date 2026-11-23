@@ -105,6 +105,14 @@ cd packaging/arch && makepkg -si
 
 ### Windows
 
+Download `kadex-<version>-windows-x64-setup.exe` from the [Releases](https://github.com/Aitemaa/Kadex/releases) page and run it. No admin rights are needed: it installs for your user into `%LOCALAPPDATA%\Programs\Kadex`. Choose "for all users" on the first page to install into Program Files instead. It adds:
+
+- a Start menu entry, so Kadex shows up in Windows search
+- optional: a desktop shortcut, starting at sign-in (keeps `Ctrl+Alt+N` ready), and an "Open with" entry for `.txt`, `.md`, and `.log` files
+- an uninstaller in **Settings → Apps**. Uninstalling never deletes your notes in `%APPDATA%\kadex`.
+
+The plain `kadex.exe` and a portable zip are attached to each release as well. To build it yourself:
+
 ```sh
 cargo build --release --target x86_64-pc-windows-msvc
 ```

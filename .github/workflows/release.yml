@@ -1,7 +1,7 @@
 name: Release
 
-# Push a version tag (git tag v0.1.0 && git push origin v0.1.0) to build the Windows release zip and
-# attach it to a draft GitHub release. "Run workflow" in the Actions tab builds it without a release,
+# Push a version tag (git tag v0.1.0 && git push origin v0.1.0) to build the Windows installer and
+# release zip and attach them to a draft GitHub release. "Run workflow" in the Actions tab builds it without a release,
 # and keeps the executable and archive as downloadable artifacts instead.
 on:
   push:
@@ -50,11 +50,25 @@ jobs:
           Copy-Item LICENSE $stage/
           Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -Force
 
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $release = (Resolve-Path target/release).Path
+          & $iscc /Q "/DAppVersion=${{ steps.version.outputs.version }}" "/DSourceDir=$release" "/DOutputDir=$release" packaging/windows/kadex.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-Item target/release/kadex-*-setup.exe | ForEach-Object { Write-Host ("{0}: {1:N0} bytes" -f $_.Name, $_.Length) }
+
       - name: Attach the release archive to a draft release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
           files: |
+            target/release/kadex-*-windows-x64-setup.exe
             target/release/kadex.exe
             target/release/kadex-*-windows-x64.zip
           draft: true
@@ -66,6 +80,7 @@ jobs:
         with:
           name: kadex-windows-x64
           path: |
+            target/release/kadex-*-windows-x64-setup.exe
             target/release/kadex.exe
             target/release/kadex-*-windows-x64.zip
           if-no-files-found: error

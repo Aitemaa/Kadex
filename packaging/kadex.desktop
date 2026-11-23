@@ -4,6 +4,7 @@ Name=Kadex
 GenericName=Notepad & Sticky Notes
 Comment=Ultra-lean native Rust Notepad & Sticky Notes
 Exec=kadex %F
+Icon=kadex
 Terminal=false
 Categories=Utility;TextEditor;
 MimeType=text/plain;text/markdown;

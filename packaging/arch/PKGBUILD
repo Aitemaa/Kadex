@@ -20,6 +20,7 @@ package() {
     cd "$startdir/../.."
     install -Dm755 "target/release/kadex" "$pkgdir/usr/bin/kadex"
     install -Dm644 "packaging/kadex.desktop" "$pkgdir/usr/share/applications/kadex.desktop"
+    install -Dm644 "assets/icon.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/kadex.svg"
     install -Dm644 "packaging/niri/kadex.kdl" "$pkgdir/usr/share/doc/kadex/niri-kadex.kdl"
     install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -46,9 +46,10 @@ mod win_impl {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AllowSetForegroundWindow, AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
         DestroyMenu, DispatchMessageW, FindWindowExW, GetAncestor, GetCursorPos, GetMessageW,
-        LoadIconW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
+        GetSystemMetrics, LoadIconW, LoadImageW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow,
         SetWindowPos, TrackPopupMenu, TranslateMessage, ASFW_ANY, EN_CHANGE, GA_ROOT,
         HWND_MESSAGE, IDI_APPLICATION, MF_STRING, MSG, SWP_NOACTIVATE, SWP_NOZORDER,
+        HICON, IMAGE_ICON, LR_DEFAULTCOLOR, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON,
         TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_DESTROY,
         WM_DPICHANGED, WM_ENDSESSION, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
         WM_PAINT, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSW,
@@ -75,6 +76,32 @@ mod win_impl {
 
     thread_local! {
         static DAEMON: RefCell<Option<WinDaemon>> = const { RefCell::new(None) };
+    }
+
+    /// Resource ID of the app icon embedded by the root crate's build script.
+    const APP_ICON_ID: usize = 1;
+
+    /// Loads the embedded app icon at the system's large or small icon size, falling back to
+    /// the stock application icon if the resource is missing (e.g. a cross-compiled build).
+    unsafe fn app_icon(hinst: *mut c_void, small: bool) -> HICON {
+        let (cx, cy) = if small {
+            (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON))
+        } else {
+            (GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON))
+        };
+        let icon = LoadImageW(
+            hinst,
+            APP_ICON_ID as *const u16,
+            IMAGE_ICON,
+            cx,
+            cy,
+            LR_DEFAULTCOLOR,
+        );
+        if icon.is_null() {
+            LoadIconW(std::ptr::null_mut(), IDI_APPLICATION)
+        } else {
+            icon
+        }
     }
 
     pub fn try_send_ipc(cmd: &IpcCommand) -> Option<String> {
@@ -142,6 +169,7 @@ mod win_impl {
             let wc_note = WNDCLASSW {
                 lpfnWndProc: Some(note_wnd_proc),
                 hInstance: hinst,
+                hIcon: app_icon(hinst, false),
                 lpszClassName: note_cls.as_ptr(),
                 ..std::mem::zeroed()
             };
@@ -176,7 +204,7 @@ mod win_impl {
             nid.hWnd = ipc_hwnd;
             nid.uID = 1;
             nid.uFlags = NIF_MESSAGE | NIF_TIP | NIF_ICON;
-            nid.hIcon = LoadIconW(std::ptr::null_mut(), IDI_APPLICATION);
+            nid.hIcon = app_icon(hinst, true);
             nid.uCallbackMessage = WM_TRAY_ICON;
             let tip = to_wide_null("Kadex — Sticky Notes & Notepad");
             for (dst, &src) in nid.szTip.iter_mut().zip(tip.iter()) {
