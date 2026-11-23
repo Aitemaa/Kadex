@@ -1,5 +1,7 @@
 //! Kadex — ultra-lean native Rust Notepad & Sticky Notes (Windows + Linux / Wayland / Niri).
 
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 use std::env;
 use std::process::ExitCode;
 

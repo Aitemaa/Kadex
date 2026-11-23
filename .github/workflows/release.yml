@@ -1,0 +1,71 @@
+name: Release
+
+# Push a version tag (git tag v0.1.0 && git push origin v0.1.0) to build the Windows release zip and
+# attach it to a draft GitHub release. "Run workflow" in the Actions tab builds it without a release,
+# and keeps the executable and archive as downloadable artifacts instead.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches the app version
+        id: version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = "tag" ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match version $version in Cargo.toml. Bump the version, then tag again."
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build Kadex
+        run: cargo build --release --locked
+
+      - name: Report binary size
+        shell: pwsh
+        run: |
+          $exe = Get-Item target/release/kadex.exe
+          Write-Host ("kadex.exe size: {0:N0} bytes ({1:N1} KB)" -f $exe.Length, ($exe.Length / 1KB))
+
+      - name: Package Windows release zip
+        shell: pwsh
+        run: |
+          $stage = "target/release/kadex-${{ steps.version.outputs.version }}-windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/kadex.exe $stage/
+          Copy-Item LICENSE $stage/
+          Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -Force
+
+      - name: Attach the release archive to a draft release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            target/release/kadex.exe
+            target/release/kadex-*-windows-x64.zip
+          draft: true
+          generate_release_notes: true
+
+      - name: Keep the executable and archive as an artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kadex-windows-x64
+          path: |
+            target/release/kadex.exe
+            target/release/kadex-*-windows-x64.zip
+          if-no-files-found: error
