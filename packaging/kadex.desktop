@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Kadex
+GenericName=Notepad & Sticky Notes
+Comment=Ultra-lean native Rust Notepad & Sticky Notes
+Exec=kadex %F
+Terminal=false
+Categories=Utility;TextEditor;
+MimeType=text/plain;text/markdown;
+StartupNotify=false

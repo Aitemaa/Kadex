@@ -1,0 +1,9 @@
+[package]
+name = "kadex-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ignatius Karel"]
+description = "OS-agnostic core for Kadex (gap buffer, undo/redo, atomic storage, INI config, search, IPC)"
+license = "MIT"
+
+[dependencies]

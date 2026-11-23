@@ -1,0 +1,35 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/platform-wl",
+    "crates/platform-win",
+]
+resolver = "2"
+
+[package]
+name = "kadex"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ignatius Karel"]
+description = "Ultra-lean native Rust Notepad & Sticky Notes for Windows and Linux (Wayland / Niri)"
+license = "MIT"
+
+[[bin]]
+name = "kadex"
+path = "src/main.rs"
+
+[dependencies]
+kadex-core = { path = "crates/core" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+kadex-platform-wl = { path = "crates/platform-wl" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+kadex-platform-win = { path = "crates/platform-win" }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

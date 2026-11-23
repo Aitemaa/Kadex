@@ -1,0 +1,10 @@
+[package]
+name = "kadex-platform-wl"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ignatius Karel"]
+description = "Ultra-lean native Wayland (wl_shm + Pango/Cairo + xkbcommon) frontend for Kadex"
+license = "MIT"
+
+[dependencies]
+kadex-core = { path = "../core" }

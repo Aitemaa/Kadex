@@ -1,0 +1,32 @@
+// Kadex — First-class Niri integration snippet
+// Include in ~/.config/niri/config.kdl or paste directly into your config.
+
+// Floating sticky notes with compact fixed size and subtle translucency
+window-rule {
+    match app-id=r#"^kadex\.sticky$"#
+    open-floating true
+    default-column-width { fixed 360; }
+    default-window-height { fixed 320; }
+    opacity 0.96
+}
+
+// Regular files opened in File Mode tile naturally in Niri columns
+window-rule {
+    match app-id=r#"^kadex\.editor$"#
+    open-floating false
+}
+
+// Instant global hotkeys via Unix socket IPC (<15 ms)
+binds {
+    // Show / hide all sticky notes
+    Mod+Shift+N { spawn "kadex" "toggle"; }
+
+    // Spawn a brand-new sticky note
+    Mod+Alt+N   { spawn "kadex" "new"; }
+
+    // Toggle layer-shell overlay scratchpad above all workspaces (Esc to dismiss)
+    Mod+Ctrl+N  { spawn "kadex" "overlay"; }
+
+    // Fuzzy-pick any sticky note via fuzzel (zero extra RAM in kadex)
+    Mod+Shift+K { spawn "sh" "-c" "id=$(kadex list | fuzzel --dmenu --prompt='Kadex> ' | cut -f1); [ -n \"$id\" ] && kadex open \"$id\""; }
+}
