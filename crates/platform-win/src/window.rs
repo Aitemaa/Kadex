@@ -61,10 +61,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClientRect, GetWindowLongPtrW, GetWindowRect,
     GetWindowTextLengthW, GetWindowTextW, KillTimer, MoveWindow, SendMessageW,
     SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW,
-    ShowWindow, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_NOHIDESEL,
-    GWLP_USERDATA, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, LWA_ALPHA, SWP_NOMOVE, SWP_NOSIZE,
-    SW_HIDE, SW_SHOW, WM_NCLBUTTONDOWN, WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED,
-    WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
+    ShowWindow, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_MULTILINE, ES_NOHIDESEL, GWLP_USERDATA,
+    HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, LWA_ALPHA, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOW,
+    WM_NCLBUTTONDOWN, WM_SETFONT, WS_CHILD, WS_CLIPCHILDREN, WS_EX_LAYERED, WS_EX_TOPMOST,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
 
 use crate::theme::{rgb_to_colorref, to_wide_null};
@@ -211,7 +211,11 @@ impl NoteWindow {
 
     pub fn toggle_pin(&mut self) {
         self.pinned = !self.pinned;
-        let insert_after = if self.pinned { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        let insert_after = if self.pinned {
+            HWND_TOPMOST
+        } else {
+            HWND_NOTOPMOST
+        };
         unsafe {
             SetWindowPos(self.hwnd, insert_after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
             InvalidateRect(self.hwnd, std::ptr::null(), 0);
@@ -413,6 +417,8 @@ impl Drop for NoteWindow {
                 DeleteObject(self.bg_brush as *mut c_void);
             }
             if !self.hwnd.is_null() {
+                // Detach first so messages sent during destruction don't reach freed state.
+                SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
                 DestroyWindow(self.hwnd);
             }
         }
@@ -481,7 +487,10 @@ pub fn create_note_window(
         }
 
         let edit_class = to_wide_null("RICHEDIT50W");
-        let mut edit_style = WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE as u32
+        let mut edit_style = WS_CHILD
+            | WS_VISIBLE
+            | WS_VSCROLL
+            | ES_MULTILINE as u32
             | ES_AUTOVSCROLL as u32
             | ES_NOHIDESEL as u32;
         if !word_wrap {
@@ -522,14 +531,16 @@ pub fn create_note_window(
             bg_brush: std::ptr::null_mut(),
         });
 
-        let ptr = (&mut *note as *mut NoteWindow) as isize;
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr);
-
         note.apply_font();
         note.apply_theme();
         note.apply_opacity();
         note.layout_children();
         note.set_text(initial_text);
+
+        // Attach the window state only after initialisation, so the EN_CHANGE that RichEdit
+        // fires for the initial text isn't treated as an edit.
+        let ptr = (&mut *note as *mut NoteWindow) as isize;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr);
 
         Some(note)
     }

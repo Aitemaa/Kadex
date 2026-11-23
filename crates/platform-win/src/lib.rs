@@ -40,14 +40,16 @@ mod win_impl {
         GetKeyState, RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, VK_CONTROL,
     };
     use windows_sys::Win32::UI::Shell::{
-        Shell_NotifyIconW, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+        Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW,
-        PostQuitMessage, RegisterClassW, SendMessageW, TranslateMessage, EN_CHANGE, HWND_MESSAGE,
-        MSG, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED, WM_ENDSESSION,
-        WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_PAINT, WM_SETTINGCHANGE, WM_SIZE,
-        WM_TIMER, WNDCLASSW,
+        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
+        DispatchMessageW, FindWindowExW, GetCursorPos, GetMessageW, LoadIconW, PostQuitMessage,
+        RegisterClassW, SendMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage,
+        EN_CHANGE, HWND_MESSAGE, IDI_APPLICATION, MF_STRING, MSG, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+        WM_APP, WM_CLOSE, WM_COMMAND, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED, WM_ENDSESSION,
+        WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_PAINT, WM_RBUTTONUP,
+        WM_SETTINGCHANGE, WM_SIZE, WM_TIMER, WNDCLASSW,
     };
 
     use crate::theme::{detect_dark_mode, to_wide_null};
@@ -75,7 +77,15 @@ mod win_impl {
 
     pub fn try_send_ipc(cmd: &IpcCommand) -> Option<String> {
         let class_w = to_wide_null(IPC_CLASS_NAME);
-        let target = unsafe { FindWindowW(class_w.as_ptr(), std::ptr::null()) };
+        // Message-only windows are only visible to FindWindowExW with HWND_MESSAGE as the parent.
+        let target = unsafe {
+            FindWindowExW(
+                HWND_MESSAGE,
+                std::ptr::null_mut(),
+                class_w.as_ptr(),
+                std::ptr::null(),
+            )
+        };
         if target.is_null() {
             return None;
         }
@@ -149,14 +159,20 @@ mod win_impl {
             );
 
             // Global hotkey: Ctrl+Alt+N toggles sticky notes
-            RegisterHotKey(ipc_hwnd, HOTKEY_TOGGLE_ID, MOD_CONTROL | MOD_ALT, b'N' as u32);
+            RegisterHotKey(
+                ipc_hwnd,
+                HOTKEY_TOGGLE_ID,
+                MOD_CONTROL | MOD_ALT,
+                b'N' as u32,
+            );
 
             // Lightweight system tray icon
             let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
             nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
             nid.hWnd = ipc_hwnd;
             nid.uID = 1;
-            nid.uFlags = NIF_MESSAGE | NIF_TIP;
+            nid.uFlags = NIF_MESSAGE | NIF_TIP | NIF_ICON;
+            nid.hIcon = LoadIconW(std::ptr::null_mut(), IDI_APPLICATION);
             nid.uCallbackMessage = WM_TRAY_ICON;
             let tip = to_wide_null("Kadex — Sticky Notes & Notepad");
             for (dst, &src) in nid.szTip.iter_mut().zip(tip.iter()) {
@@ -192,7 +208,11 @@ mod win_impl {
 
     fn handle_command(cmd: IpcCommand) {
         DAEMON.with(|slot| {
-            let mut guard = slot.borrow_mut();
+            // A Win32 call made while handling a command can re-enter the window procedure,
+            // so never assume the daemon is free to borrow.
+            let Ok(mut guard) = slot.try_borrow_mut() else {
+                return;
+            };
             let Some(d) = guard.as_mut() else { return };
             match cmd {
                 IpcCommand::Activate => {
@@ -238,7 +258,14 @@ mod win_impl {
         let text = d.storage.load_note(&id).unwrap_or_default();
         let saved = d.storage.state.notes.get(&id).cloned();
         let (x, y, w, h, pal, pinned) = match saved {
-            Some(s) => (s.x, s.y, s.width as i32, s.height as i32, s.palette, s.pinned),
+            Some(s) => (
+                s.x,
+                s.y,
+                s.width as i32,
+                s.height as i32,
+                s.palette,
+                s.pinned,
+            ),
             None => (
                 120 + (d.windows.len() as i32) * 28,
                 120 + (d.windows.len() as i32) * 28,
@@ -249,7 +276,9 @@ mod win_impl {
             ),
         };
         if let Some(win) = create_note_window(
-            WinMode::Sticky { note_id: id.clone() },
+            WinMode::Sticky {
+                note_id: id.clone(),
+            },
             "Kadex Note",
             x,
             y,
@@ -288,7 +317,9 @@ mod win_impl {
         };
         let title = format!(
             "{} — Kadex",
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("Untitled")
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("Untitled")
         );
         if let Some(win) = create_note_window(
             WinMode::File {
@@ -351,12 +382,53 @@ mod win_impl {
 
     fn flush_all() {
         DAEMON.with(|slot| {
-            if let Some(d) = slot.borrow_mut().as_mut() {
+            if let Some(d) = slot
+                .try_borrow_mut()
+                .ok()
+                .as_deref_mut()
+                .and_then(Option::as_mut)
+            {
                 for w in &mut d.windows {
                     flush_note(&mut d.storage, w);
                 }
             }
         });
+    }
+
+    const TRAY_CMD_NEW: usize = 1;
+    const TRAY_CMD_TOGGLE: usize = 2;
+    const TRAY_CMD_QUIT: usize = 3;
+
+    unsafe fn show_tray_menu(hwnd: HWND) {
+        let menu = CreatePopupMenu();
+        if menu.is_null() {
+            return;
+        }
+        let new_w = to_wide_null("New note");
+        let toggle_w = to_wide_null("Show / hide notes");
+        let quit_w = to_wide_null("Quit Kadex");
+        AppendMenuW(menu, MF_STRING, TRAY_CMD_NEW, new_w.as_ptr());
+        AppendMenuW(menu, MF_STRING, TRAY_CMD_TOGGLE, toggle_w.as_ptr());
+        AppendMenuW(menu, MF_STRING, TRAY_CMD_QUIT, quit_w.as_ptr());
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        SetForegroundWindow(hwnd);
+        let cmd = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            pt.x,
+            pt.y,
+            0,
+            hwnd,
+            std::ptr::null(),
+        );
+        DestroyMenu(menu);
+        match cmd as usize {
+            TRAY_CMD_NEW => handle_command(IpcCommand::NewSticky),
+            TRAY_CMD_TOGGLE => handle_command(IpcCommand::Toggle),
+            TRAY_CMD_QUIT => handle_command(IpcCommand::Quit),
+            _ => {}
+        }
     }
 
     unsafe extern "system" fn ipc_wnd_proc(
@@ -386,14 +458,21 @@ mod win_impl {
                 0
             }
             WM_TRAY_ICON => {
-                if lparam as u32 == WM_LBUTTONUP {
-                    handle_command(IpcCommand::Toggle);
+                match lparam as u32 {
+                    WM_LBUTTONUP => handle_command(IpcCommand::Toggle),
+                    WM_RBUTTONUP => show_tray_menu(hwnd),
+                    _ => {}
                 }
                 0
             }
             WM_SETTINGCHANGE => {
                 DAEMON.with(|slot| {
-                    if let Some(d) = slot.borrow_mut().as_mut() {
+                    if let Some(d) = slot
+                        .try_borrow_mut()
+                        .ok()
+                        .as_deref_mut()
+                        .and_then(Option::as_mut)
+                    {
                         let dark = detect_dark_mode(d.storage.config.theme);
                         if dark != d.dark {
                             d.dark = dark;
@@ -439,13 +518,19 @@ mod win_impl {
                 if ctrl {
                     if let Some(note) = window_from_hwnd(hwnd) {
                         match wparam as u32 {
-                            0x54 => note.toggle_pin(),       // Ctrl+T
-                            0xBB => note.zoom(10),           // Ctrl+=
-                            0xBD => note.zoom(-10),          // Ctrl+-
-                            0x30 => note.reset_zoom(),       // Ctrl+0
-                            0x53 => {                        // Ctrl+S
+                            0x54 => note.toggle_pin(), // Ctrl+T
+                            0xBB => note.zoom(10),     // Ctrl+=
+                            0xBD => note.zoom(-10),    // Ctrl+-
+                            0x30 => note.reset_zoom(), // Ctrl+0
+                            0x53 => {
+                                // Ctrl+S
                                 DAEMON.with(|slot| {
-                                    if let Some(d) = slot.borrow_mut().as_mut() {
+                                    if let Some(d) = slot
+                                        .try_borrow_mut()
+                                        .ok()
+                                        .as_deref_mut()
+                                        .and_then(Option::as_mut)
+                                    {
                                         flush_note(&mut d.storage, note);
                                     }
                                 });
@@ -458,8 +543,10 @@ mod win_impl {
             }
             WM_PAINT => {
                 if let Some(note) = window_from_hwnd(hwnd) {
-                    note.paint_header();
-                    return 0;
+                    if note.is_sticky() {
+                        note.paint_header();
+                        return 0;
+                    }
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
@@ -480,7 +567,12 @@ mod win_impl {
                             if let WinMode::Sticky { note_id } = &note.mode {
                                 let id = note_id.clone();
                                 DAEMON.with(|slot| {
-                                    if let Some(d) = slot.borrow_mut().as_mut() {
+                                    if let Some(d) = slot
+                                        .try_borrow_mut()
+                                        .ok()
+                                        .as_deref_mut()
+                                        .and_then(Option::as_mut)
+                                    {
                                         let _ = d.storage.archive_note(&id);
                                         d.windows.retain(|w| w.hwnd != hwnd);
                                     }
@@ -501,7 +593,9 @@ mod win_impl {
                     if let Some(note) = window_from_hwnd(hwnd) {
                         note.dirty = true;
                         DAEMON.with(|slot| {
-                            if let Some(d) = slot.borrow().as_ref() {
+                            if let Some(d) =
+                                slot.try_borrow().ok().as_deref().and_then(Option::as_ref)
+                            {
                                 note.schedule_autosave(d.storage.config.autosave_ms);
                             }
                         });
@@ -513,7 +607,12 @@ mod win_impl {
                 if wparam == TIMER_AUTOSAVE {
                     if let Some(note) = window_from_hwnd(hwnd) {
                         DAEMON.with(|slot| {
-                            if let Some(d) = slot.borrow_mut().as_mut() {
+                            if let Some(d) = slot
+                                .try_borrow_mut()
+                                .ok()
+                                .as_deref_mut()
+                                .and_then(Option::as_mut)
+                            {
                                 flush_note(&mut d.storage, note);
                             }
                         });
@@ -525,7 +624,12 @@ mod win_impl {
                 if let Some(note) = window_from_hwnd(hwnd) {
                     let is_sticky = note.is_sticky();
                     DAEMON.with(|slot| {
-                        if let Some(d) = slot.borrow_mut().as_mut() {
+                        if let Some(d) = slot
+                            .try_borrow_mut()
+                            .ok()
+                            .as_deref_mut()
+                            .and_then(Option::as_mut)
+                        {
                             flush_note(&mut d.storage, note);
                             if is_sticky {
                                 note.show(false);
