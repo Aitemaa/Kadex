@@ -157,6 +157,12 @@ cargo +nightly build --release \
   --target x86_64-unknown-linux-gnu
 ```
 
+Or install for your user (no sudo; builds if needed, installs to `~/.local`):
+```sh
+./packaging/linux/install.sh              # add --rebuild to force a rebuild
+./packaging/linux/install.sh --uninstall  # remove (notes are kept)
+```
+
 Or build an Arch/CachyOS package:
 ```sh
 cd packaging/arch && makepkg -si
