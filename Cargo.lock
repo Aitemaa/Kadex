@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "kadex"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kadex-core",
  "kadex-platform-win",
@@ -36,11 +36,11 @@ dependencies = [
 
 [[package]]
 name = "kadex-core"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "kadex-platform-win"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kadex-core",
  "windows-sys",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "kadex-platform-wl"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "kadex-core",
 ]

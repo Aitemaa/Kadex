@@ -394,6 +394,10 @@ impl NoteWindow {
                 MoveWindow(self.edit_hwnd, 0, top, w, h, 1);
             }
         }
+        // The class has no CS_HREDRAW, so a resize only invalidates the newly exposed strip.
+        // The right-anchored header buttons and the title move with the width, so repaint the
+        // whole header or stale copies of them stay behind.
+        self.invalidate_header();
     }
 
     pub fn set_text(&mut self, text: &str) {

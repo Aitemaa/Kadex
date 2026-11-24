@@ -1,6 +1,6 @@
 # Maintainer: Ignatius Karel <https://github.com/Aitemaa/Kadex>
 pkgname=kadex
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="Ultra-lean native Rust Notepad & Sticky Notes for Wayland/Niri (wl_shm + Pango/Cairo)"
 arch=('x86_64')

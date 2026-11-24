@@ -1,6 +1,6 @@
 [package]
 name = "kadex-platform-win"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Ignatius Karel"]
 description = "Pure Win32 + MSFTEDIT_CLASS (RichEdit) + GDI + DWM frontend for Kadex"
