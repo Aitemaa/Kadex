@@ -1191,7 +1191,11 @@ void kdx_win_start_move(KdxWin *win) {
 // ---- Painting ----
 bool kdx_win_begin_paint(KdxWin *win, KdxCanvas *out_canvas) {
     if (!win || !win->configured || !out_canvas) return false;
-    int idx = !win->bufs[0].busy ? 0 : (!win->bufs[1].busy ? 1 : 0);
+    int idx = !win->bufs[0].busy ? 0 : (!win->bufs[1].busy ? 1 : -1);
+    // Both buffers are still held by the compositor: drawing now would overwrite pixels it may
+    // be reading (torn / garbled frames under fast typing). Skip; the caller keeps needs_redraw
+    // set and the wl_buffer.release event wakes the loop to retry.
+    if (idx < 0) return false;
 
     int32_t phys_w, phys_h;
     if (win->viewport) {
