@@ -1,6 +1,6 @@
 # Maintainer: Ignatius Karel <https://github.com/Aitemaa/Kadex>
 pkgname=kadex
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Ultra-lean native Rust Notepad & Sticky Notes for Wayland/Niri (wl_shm + Pango/Cairo)"
 arch=('x86_64')
@@ -21,6 +21,9 @@ package() {
     install -Dm755 "target/release/kadex" "$pkgdir/usr/bin/kadex"
     install -Dm644 "packaging/kadex.desktop" "$pkgdir/usr/share/applications/kadex.desktop"
     install -Dm644 "assets/icon.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/kadex.svg"
+    for id in kadex.sticky kadex.editor kadex.overlay; do
+        install -Dm644 "assets/icon.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$id.svg"
+    done
     install -Dm644 "packaging/niri/kadex.kdl" "$pkgdir/usr/share/doc/kadex/niri-kadex.kdl"
     install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 "assets/fonts/OFL.txt" "$pkgdir/usr/share/licenses/$pkgname/OFL-Archivo.txt"
