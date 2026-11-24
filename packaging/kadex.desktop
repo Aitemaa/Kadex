@@ -9,3 +9,4 @@ Terminal=false
 Categories=Utility;TextEditor;
 MimeType=text/plain;text/markdown;
 StartupNotify=false
+StartupWMClass=kadex.editor

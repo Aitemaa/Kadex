@@ -8,6 +8,8 @@ BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 APP_DIR="$DATA_DIR/applications"
 ICON_DIR="$DATA_DIR/icons/hicolor/scalable/apps"
+# Kadex windows use these app-ids; panels and launchers look the icon up by app-id.
+WINDOW_APP_IDS="kadex.sticky kadex.editor kadex.overlay"
 
 refresh_caches() {
     if command -v update-desktop-database >/dev/null 2>&1; then
@@ -21,6 +23,7 @@ refresh_caches() {
 if [ "${1:-}" = "--uninstall" ]; then
     "$BIN_DIR/kadex" quit >/dev/null 2>&1 || true
     rm -f "$BIN_DIR/kadex" "$APP_DIR/kadex.desktop" "$ICON_DIR/kadex.svg"
+    for id in $WINDOW_APP_IDS; do rm -f "$ICON_DIR/$id.svg"; done
     refresh_caches
     echo "Kadex removed. Your notes were left untouched."
     exit 0
@@ -38,6 +41,9 @@ mkdir -p "$BIN_DIR" "$APP_DIR" "$ICON_DIR"
 install -Dm755 "$BIN_SRC" "$BIN_DIR/kadex"
 install -Dm644 "$ROOT_DIR/packaging/kadex.desktop" "$APP_DIR/kadex.desktop"
 install -Dm644 "$ROOT_DIR/assets/icon.svg" "$ICON_DIR/kadex.svg"
+for id in $WINDOW_APP_IDS; do
+    install -Dm644 "$ROOT_DIR/assets/icon.svg" "$ICON_DIR/$id.svg"
+done
 refresh_caches
 
 echo "Installed:"
